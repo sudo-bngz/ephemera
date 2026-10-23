@@ -79,9 +79,73 @@ gltf = {
     "bufferViews": views,
     "accessors": accessors,
 }
+def write(gltf, blob, path):
+    js = pad(json.dumps(gltf).encode(), fill=b' ')
+    out = b'glTF' + struct.pack('<II', 2, 12 + 8 + len(js) + 8 + len(blob))
+    out += struct.pack('<I', len(js)) + b'JSON' + js
+    out += struct.pack('<I', len(blob)) + b'BIN\0' + blob
+    open(path, 'wb').write(out)
+    print(path, len(out), 'bytes')
+
+write(gltf, blob, 'animated.glb')
 js = pad(json.dumps(gltf).encode(), fill=b' ')
 out = b'glTF' + struct.pack('<II', 2, 12 + 8 + len(js) + 8 + len(blob))
 out += struct.pack('<I', len(js)) + b'JSON' + js
 out += struct.pack('<I', len(blob)) + b'BIN\0' + blob
-open('animated.glb', 'wb').write(out)
-print('animated.glb', len(out), 'bytes')
+
+# rider_horse.glb: the same figure lifted 1.2 m, sitting on a "horse" — a
+# second mesh skinned to a skeleton of its own — like a Meshy riding clip
+# that bakes its prop into the file.
+blob = b''; views.clear(); accessors.clear()
+lift = 1.2
+pverts = [(x, y + lift, z) for (x, y, z) in verts]
+hverts, hjoints = [], []
+for y in (0.0, lift):
+    for x, z in ((-0.4, -1.0), (0.4, -1.0), (0.4, 1.0), (-0.4, 1.0)):
+        hverts.append((x, y, z)); hjoints.append((0, 0, 0, 0))
+hidx = []
+for k in range(4):
+    a, b = k, (k + 1) % 4
+    hidx += [a, b, a + 4, b, b + 4, a + 4]
+xs, ys, zs = zip(*pverts)
+p_pos = add(pverts, '<fff', len(pverts), 5126, "VEC3", 34962, ([min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)]))
+p_j = add(joints, '<HHHH', len(joints), 5123, "VEC4", 34962)
+p_w = add(weights, '<ffff', len(weights), 5126, "VEC4", 34962)
+p_i = add(idx, '<H', len(idx), 5123, "SCALAR", 34963)
+ibm_p = [(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-lift,0,1), (1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-lift-0.9,0,1)]
+p_ibm = add(ibm_p, '<' + 'f' * 16, 2, 5126, "MAT4")
+xs, ys, zs = zip(*hverts)
+h_pos = add(hverts, '<fff', len(hverts), 5126, "VEC3", 34962, ([min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)]))
+h_j = add(hjoints, '<HHHH', len(hjoints), 5123, "VEC4", 34962)
+h_w = add([(1.0, 0.0, 0.0, 0.0)] * len(hverts), '<ffff', len(hverts), 5126, "VEC4", 34962)
+h_i = add(hidx, '<H', len(hidx), 5123, "SCALAR", 34963)
+h_ibm = add([(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1)], '<' + 'f' * 16, 1, 5126, "MAT4")
+t_acc = add(times, '<f', 3, 5126, "SCALAR", None, ([0.0], [1.0]))
+r_acc = add(idle_rot, '<ffff', 3, 5126, "VEC4")
+gltf = {
+    "asset": {"version": "2.0", "generator": "make_animated.py"},
+    "scene": 0,
+    "scenes": [{"nodes": [0, 1, 3, 4]}],
+    "nodes": [
+        {"name": "Character", "mesh": 0, "skin": 0},
+        {"name": "Hips", "children": [2], "translation": [0, lift, 0]},
+        {"name": "Spine", "translation": [0, 0.9, 0]},
+        {"name": "Mesh_1", "mesh": 1, "skin": 1},
+        {"name": "Root_1", "translation": [0, 0, 0]},
+    ],
+    "skins": [
+        {"inverseBindMatrices": p_ibm, "joints": [1, 2], "skeleton": 1},
+        {"inverseBindMatrices": h_ibm, "joints": [4], "skeleton": 4},
+    ],
+    "meshes": [
+        {"name": "Character", "primitives": [{"attributes": {"POSITION": p_pos, "JOINTS_0": p_j, "WEIGHTS_0": p_w}, "indices": p_i}]},
+        {"name": "Mesh_1", "primitives": [{"attributes": {"POSITION": h_pos, "JOINTS_0": h_j, "WEIGHTS_0": h_w}, "indices": h_i}]},
+    ],
+    "animations": [{"name": "Horse Riding Idle",
+                    "samplers": [{"input": t_acc, "output": r_acc, "interpolation": "LINEAR"}],
+                    "channels": [{"sampler": 0, "target": {"node": 2, "path": "rotation"}}]}],
+    "buffers": [{"byteLength": len(blob)}],
+    "bufferViews": views,
+    "accessors": accessors,
+}
+write(gltf, blob, 'rider_horse.glb')

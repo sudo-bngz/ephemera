@@ -12,7 +12,9 @@
 #   pose       t-pose / a-pose for characters you may rig later
 #   animate    actions from Meshy's animation library (humanoids only): the
 #              model is rigged and the GLB carries a clip for each; the game
-#              plays them by name (idle, walk, run, crouch, jump, swim, sit)
+#              plays them by name (idle, walk, run, crouch, jump, swim, sit).
+#              Clips that come with a prop (horse, chair…) are skipped unless
+#              the name asks for one; `#123` picks a library action by id.
 #   height     the character's height in metres, for rigging (1.7)
 #
 # The reeds are instanced ~450 times in a race: keep them light.

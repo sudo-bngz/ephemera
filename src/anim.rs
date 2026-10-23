@@ -12,12 +12,23 @@
 //! `AnimationPlayer`, cross-fading between clips as the figure's `Gait`,
 //! `Stance` or `Flap` asks: idle, walk, run, jump, swim, sit for a rider,
 //! fly for a creature. Clips are matched to actions by name.
+//!
+//! **Strays.** Some animation sources bake a prop into the file with the
+//! character — a horse under a riding clip, a chair under a sitting one.
+//! For a character, only the skeleton that looks like a person (hips,
+//! spine, arms, legs by name) and the meshes skinned to it or hung on its
+//! bones are kept; anything else is hidden and left out of the measuring.
+//!
+//! **Seat.** A rider's hips are pinned to the saddle every frame, whatever
+//! the clip or the pose does, so she sits on the creature and not above,
+//! in front of or inside it.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use bevy::gltf::Gltf;
 use bevy::math::Affine3A;
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 
@@ -101,6 +112,42 @@ pub struct Clips {
 #[derive(Component)]
 pub struct Measured;
 
+/// The bone a rider sits on: pinned to the saddle while mounted. Put on the
+/// figure's root; the placeholder's hips first, a model's once it loads.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Hips(pub Entity);
+
+/// How much a skeleton looks like a person, from its bone names.
+fn humanoid_score(names: &[String]) -> usize {
+    const PARTS: [&str; 14] = [
+        "hips", "pelvis", "spine", "chest", "neck", "head", "shoulder", "arm", "forearm", "hand",
+        "upleg", "thigh", "leg", "foot",
+    ];
+    names
+        .iter()
+        .filter(|n| PARTS.iter().any(|p| n.contains(p)))
+        .count()
+}
+
+fn bone_name(n: Option<&Name>) -> String {
+    n.map(|n| {
+        n.as_str()
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn is_beast_bone(n: &str) -> bool {
+    [
+        "horse", "saddle", "rein", "bridle", "mane", "hoof", "chair", "stool", "seat", "prop",
+    ]
+    .iter()
+    .any(|w| n.contains(w))
+}
+
 fn descendants(e: Entity, children: &Query<&Children>, out: &mut Vec<Entity>) {
     if let Ok(kids) = children.get(e) {
         for k in kids.iter() {
@@ -143,17 +190,103 @@ fn measure_models(
     gltfs: Res<Assets<Gltf>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     mut placements: Query<&mut Transform, With<SwappedModel>>,
+    skins: Query<&SkinnedMesh>,
+    names: Query<&Name>,
 ) {
     for (root, swap, parent) in &swapped {
         let mut all = Vec::new();
         descendants(root, &children, &mut all);
-        let mesh_entities: Vec<Entity> = all
+        let mut mesh_entities: Vec<Entity> = all
             .iter()
             .copied()
             .filter(|e| meshes3d.contains(*e))
             .collect();
         if mesh_entities.is_empty() {
             continue; // the scene hasn't spawned yet
+        }
+        if mesh_entities
+            .iter()
+            .filter_map(|e| meshes3d.get(*e).ok())
+            .any(|m| meshes.get(&m.0).is_none())
+        {
+            continue; // still loading
+        }
+
+        // A character: keep the person, hide whatever came with her.
+        let humanoid = matches!(
+            swap.kind,
+            crate::models::ModelKind::Judith | crate::models::ModelKind::Villager
+        );
+        let mut hips = None;
+        if humanoid {
+            let skinned: Vec<(Entity, &SkinnedMesh)> = mesh_entities
+                .iter()
+                .filter_map(|e| skins.get(*e).ok().map(|s| (*e, s)))
+                .collect();
+            let best = skinned.iter().max_by_key(|(e, s)| {
+                let bones: Vec<String> = s
+                    .joints
+                    .iter()
+                    .map(|j| bone_name(names.get(*j).ok()))
+                    .collect();
+                let beast = bones.iter().filter(|b| is_beast_bone(b)).count();
+                let verts = meshes3d
+                    .get(*e)
+                    .ok()
+                    .and_then(|m| meshes.get(&m.0))
+                    .map(|m| m.count_vertices())
+                    .unwrap_or(0);
+                (humanoid_score(&bones).saturating_sub(beast * 4), verts)
+            });
+            if let Some((_, main)) = best {
+                let joints: std::collections::HashSet<Entity> =
+                    main.joints.iter().copied().collect();
+                let on_skeleton = |e: Entity| {
+                    let mut cur = e;
+                    while let Ok(p) = parents.get(cur) {
+                        if joints.contains(&p.parent()) {
+                            return true;
+                        }
+                        if p.parent() == root {
+                            break;
+                        }
+                        cur = p.parent();
+                    }
+                    false
+                };
+                let mut kept = Vec::new();
+                for e in &mesh_entities {
+                    let keep = match skins.get(*e) {
+                        Ok(s) => s.joints.iter().any(|j| joints.contains(j)),
+                        Err(_) => on_skeleton(*e),
+                    } && !is_beast_bone(&bone_name(names.get(*e).ok()));
+                    if keep {
+                        kept.push(*e);
+                    } else {
+                        info!(
+                            "{:?} model: hiding `{}`, not part of the character",
+                            swap.kind,
+                            names.get(*e).map(|n| n.as_str()).unwrap_or("a mesh")
+                        );
+                        commands.entity(*e).insert(Visibility::Hidden);
+                    }
+                }
+                if !kept.is_empty() {
+                    mesh_entities = kept;
+                }
+                hips = main
+                    .joints
+                    .iter()
+                    .copied()
+                    .find(|j| {
+                        let n = bone_name(names.get(*j).ok());
+                        n.contains("hips") || n.contains("pelvis")
+                    })
+                    .or_else(|| main.joints.first().copied());
+            }
+        }
+        if let Some(h) = hips {
+            commands.entity(parent.parent()).insert(Hips(h));
         }
         let handles: Vec<Handle<Mesh>> = mesh_entities
             .iter()
@@ -361,6 +494,43 @@ fn drive_clips(
     }
 }
 
+/// Where a rider's hips go on a mount: just above its saddle, or on the
+/// placeholder's thorax.
+pub fn saddle_point(bounds: Option<&ModelBounds>) -> Vec3 {
+    match bounds {
+        Some(b) => b.saddle + Vec3::Y * 0.12,
+        None => Vec3::new(0.0, 0.62, -0.45),
+    }
+}
+
+/// Keeps every mounted rider's hips on the saddle: after the animation has
+/// posed the bones and transforms have propagated, the rider is moved by
+/// whatever separates her hips from the seat. Stable under any clip.
+fn pin_riders(
+    mut riders: Query<(&Hips, &ChildOf, &mut Transform)>,
+    mounts: Query<(&GlobalTransform, Option<&ModelBounds>), With<Flap>>,
+    globals: Query<&GlobalTransform>,
+) {
+    for (hips, parent, mut tf) in &mut riders {
+        let Ok((mount, bounds)) = mounts.get(parent.parent()) else {
+            continue;
+        };
+        let Ok(h) = globals.get(hips.0) else {
+            continue;
+        };
+        let seat = mount.transform_point(saddle_point(bounds));
+        let delta = seat - h.translation();
+        if !delta.is_finite() {
+            continue;
+        }
+        let (scale, rot, _) = mount.to_scale_rotation_translation();
+        let local = rot.inverse() * delta / scale.max(Vec3::splat(1e-4));
+        tf.translation += local * 0.7;
+        // Sitting straight, facing where the creature goes.
+        tf.rotation = Quat::IDENTITY;
+    }
+}
+
 /// Seats riders on a model's saddle once it is known.
 fn seat_riders(
     mounts: Query<(Entity, &ModelBounds), Added<ModelBounds>>,
@@ -405,6 +575,10 @@ impl Plugin for AnimPlugin {
             drive_clips
                 .after(crate::camera::follow)
                 .in_set(crate::GameSet::Camera),
+        )
+        .add_systems(
+            PostUpdate,
+            pin_riders.after(bevy::transform::TransformSystems::Propagate),
         );
     }
 }

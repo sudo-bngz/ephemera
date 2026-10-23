@@ -221,6 +221,11 @@ struct Api {
     agent: ureq::Agent,
 }
 
+/// Words that mark a clip baked with a prop or a mount.
+const PROPS: [&str; 10] = [
+    "horse", "riding", "ride", "mount", "chair", "sofa", "bench", "bike", "car", "vehicle",
+];
+
 /// Which Meshy API a stage talks to.
 fn endpoint(stage: &str) -> &'static str {
     match stage {
@@ -266,6 +271,10 @@ impl Api {
     /// Looks an action up in Meshy's animation library by name: the best
     /// match is the shortest name containing the words asked for.
     fn find_action(&self, name: &str) -> Result<(u64, String), String> {
+        // `#123`: that action, as listed in Meshy's library.
+        if let Some(id) = name.strip_prefix('#').and_then(|n| n.trim().parse::<u64>().ok()) {
+            return Ok((id, format!("action #{id}")));
+        }
         // The library is a bare array (no pages); `search` matches names
         // and keys. Search on the first word so "crouch walk" finds
         // "Crouched Walking" too.
@@ -299,6 +308,15 @@ impl Api {
             };
             let ln = n.to_ascii_lowercase();
             let lk = it["key"].as_str().unwrap_or("").to_ascii_lowercase().replace('_', " ");
+            // Clips that come with a prop (a horse under a riding clip, a
+            // chair under a sitting one) are skipped unless asked for.
+            let sub = it["sub_category"].as_str().unwrap_or("").to_ascii_lowercase();
+            let prop = PROPS
+                .iter()
+                .any(|p| (ln.contains(p) || lk.contains(p) || sub.contains(p)) && !wanted.contains(p));
+            if prop {
+                continue;
+            }
             let score = if ln == wanted || lk == wanted {
                 0
             } else if words.iter().all(|w| ln.contains(w) || lk.contains(w)) {
@@ -512,8 +530,11 @@ fn animate(
             match refine.or(ledger.lock().unwrap().get(name, "refine").as_deref()) {
                 Some(task) => body["input_task_id"] = json!(task),
                 None => {
-                    // Rig the file we have: as a data URI (≤ 100 MB).
-                    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                    // Rig the file we have — its static original if it was
+                    // animated before — as a data URI (≤ 100 MB).
+                    let still = out_dir.join(format!("{name}.static.glb"));
+                    let src = if still.exists() { still } else { path.clone() };
+                    let bytes = fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
                     if bytes.len() > 100 * 1024 * 1024 {
                         return Err("GLB over 100 MB: too big to upload for rigging".into());
                     }
@@ -553,8 +574,11 @@ fn animate(
         .as_str()
         .filter(|u| !u.is_empty())
         .ok_or("animation succeeded but returned no GLB url")?;
-    // Keep the static model next to the animated one.
-    let _ = fs::copy(&path, out_dir.join(format!("{name}.static.glb")));
+    // Keep the static model next to the animated one (the first time).
+    let still = out_dir.join(format!("{name}.static.glb"));
+    if !still.exists() {
+        let _ = fs::copy(&path, &still);
+    }
     let bytes = api.download(url, &path)?;
     println!(
         "  {name:<10} ✓ rigged + {} clip(s): {} ({:.1} MB)",
@@ -562,7 +586,10 @@ fn animate(
         path.display(),
         bytes as f64 / 1e6
     );
-    ledger.lock().unwrap().clear(name);
+    // Forget the tasks, but keep the rig: `--reanimate` reuses it.
+    let mut l = ledger.lock().unwrap();
+    l.clear(name);
+    l.set(name, "rig", &rig);
     Ok(())
 }
 
@@ -584,6 +611,7 @@ fn main() {
     let mut names = Vec::new();
     let mut dry_run = false;
     let mut force = false;
+    let mut reanimate = false;
     let mut base = std::env::var("MESHY_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE.into());
     let mut ai_model = "latest".to_string();
     let mut poll = Duration::from_secs(5);
@@ -592,6 +620,7 @@ fn main() {
         match a.as_str() {
             "--dry-run" | "-n" => dry_run = true,
             "--force" | "-f" => force = true,
+            "--reanimate" => reanimate = true,
             "--base-url" => base = args.next().expect("--base-url needs a value"),
             "--ai-model" => ai_model = args.next().expect("--ai-model needs a value"),
             "--poll-ms" => {
@@ -603,8 +632,9 @@ fn main() {
             }
             "-h" | "--help" => {
                 println!(
-                    "usage: meshy-gen [model…] [--dry-run] [--force] [--ai-model NAME] [--base-url URL]\n\
+                    "usage: meshy-gen [model…] [--dry-run] [--force] [--reanimate] [--ai-model NAME] [--base-url URL]\n\
                      Reads assets/models/meshy-prompts.txt, writes assets/models/<model>.glb.\n\
+                     --reanimate  fetch the `animate =` clips again for models that already have some\n\
                      Needs MESHY_API_KEY."
                 );
                 return;
@@ -648,7 +678,7 @@ fn main() {
         let path = out_dir.join(format!("{}.glb", s.name));
         if force || !path.exists() {
             todo.push(s);
-        } else if !s.animate.is_empty() && !has_animations(&path) {
+        } else if !s.animate.is_empty() && (reanimate || !has_animations(&path)) {
             println!("  {:<10} exists; rigging and animating it", s.name);
             to_animate.push(s);
         } else {

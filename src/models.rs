@@ -624,6 +624,90 @@ mod gltf_tests {
         assert!(spawned, "the GLB scene never spawned a mesh");
     }
 
+    /// The screenshot bug: a riding clip with a horse baked into the file.
+    /// The horse is hidden and left out of her measurements, and her hips
+    /// end up on the Ephemera's saddle, not 1.2 m above it on the horse.
+    #[test]
+    fn rider_sits_on_the_saddle_without_her_horse() {
+        use crate::anim::{Hips, ModelBounds, saddle_point};
+        let mut app = app();
+        let scene = load(&mut app, "rider_horse.glb");
+        let gltf: Handle<Gltf> = app
+            .world()
+            .resource::<AssetServer>()
+            .load("rider_horse.glb");
+        let mut models = Models::default().with(ModelKind::Judith, scene);
+        models.loaded[0].1.gltf = gltf;
+        app.insert_resource(models);
+        let saddle = Vec3::new(0.0, 1.1, 0.3);
+        let mount = app
+            .world_mut()
+            .spawn((
+                Flap::default(),
+                ModelBounds {
+                    bottom: -1.5,
+                    top: 2.0,
+                    saddle,
+                },
+                Transform::from_xyz(5.0, 10.0, -3.0).with_rotation(Quat::from_rotation_y(0.7)),
+                Visibility::default(),
+            ))
+            .id();
+        let judith = app
+            .world_mut()
+            .spawn((
+                Swappable::new(ModelKind::Judith),
+                Gait::default(),
+                Transform::from_xyz(0.0, 0.1, -0.5).with_scale(Vec3::splat(0.9)),
+                Visibility::default(),
+                ChildOf(mount),
+            ))
+            .id();
+        let found = run_until(&mut app, |w| w.get::<Hips>(judith).is_some());
+        assert!(found, "her hips were never found");
+        for _ in 0..30 {
+            app.update();
+        }
+        // The horse is hidden; the character is not.
+        let w = app.world_mut();
+        let mut shown = 0;
+        let mut hidden = 0;
+        for (e, vis) in w
+            .query_filtered::<(Entity, &Visibility), With<bevy::mesh::skinning::SkinnedMesh>>()
+            .iter(w)
+        {
+            let _ = e;
+            match vis {
+                Visibility::Hidden => hidden += 1,
+                _ => shown += 1,
+            }
+        }
+        assert_eq!(
+            (shown, hidden),
+            (1, 1),
+            "horse not hidden (shown {shown}, hidden {hidden})"
+        );
+        // Her measurements are hers: feet near her origin, not the horse's.
+        let b = w.get::<ModelBounds>(judith).unwrap();
+        assert!(
+            b.bottom > 1.0,
+            "measured with the horse: bottom {}",
+            b.bottom
+        );
+        // And her hips sit on the saddle.
+        let hips = w.get::<Hips>(judith).unwrap().0;
+        let h = w.get::<GlobalTransform>(hips).unwrap().translation();
+        let seat = w
+            .get::<GlobalTransform>(mount)
+            .unwrap()
+            .transform_point(saddle_point(Some(&ModelBounds {
+                bottom: -1.5,
+                top: 2.0,
+                saddle,
+            })));
+        assert!(h.distance(seat) < 0.05, "hips at {h}, saddle at {seat}");
+    }
+
     /// An auto-fitted slot: any model is scaled to the box the world asked
     /// for, bottom on the ground.
     #[test]

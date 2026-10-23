@@ -254,6 +254,8 @@ fn spawn_figure(
         1.9,
         root,
     );
-    commands.entity(root).insert(rig);
+    commands
+        .entity(root)
+        .insert((crate::anim::Hips(rig.joints[HIPS]), rig));
     root
 }

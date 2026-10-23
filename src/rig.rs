@@ -982,6 +982,11 @@ pub(crate) fn rig_models(
             joints.len(),
             points.len()
         );
+        if plan.kind == RigKind::Humanoid {
+            commands
+                .entity(parent.parent())
+                .insert(crate::anim::Hips(joints[human::HIPS]));
+        }
         commands.entity(root).insert((
             Rigged,
             Rig {
