@@ -338,16 +338,21 @@ fn resolve(
     mut next: ResMut<NextState<GamePhase>>,
     mut log: ResMut<RunLog>,
     judith: Query<&Transform, With<Judith>>,
-    mut creature: Query<(&mut Transform, &mut Wild), (With<Ephemera>, Without<Judith>)>,
+    mut creature: Query<
+        (&mut Transform, &mut Wild, Option<&crate::anim::ModelBounds>),
+        (With<Ephemera>, Without<Judith>),
+    >,
     mut cams: Query<&mut ChaseCamera>,
     mut stats: ResMut<EphemeraStats>,
     terrain: Res<WorldTerrain>,
     mut sfx: MessageWriter<PlaySound>,
 ) {
     let dt = time.delta_secs();
-    let Ok((mut etf, mut wild)) = creature.single_mut() else {
+    let Ok((mut etf, mut wild, bounds)) = creature.single_mut() else {
         return;
     };
+    // Its legs, not its belly, touch the pad.
+    let clearance = bounds.map(|b| -b.bottom + 0.2).unwrap_or(2.0);
 
     // Flee flight: rise, then glide to the target.
     if wild.fleeing {
@@ -362,13 +367,16 @@ fn resolve(
             etf.translation += dir * speed * dt;
             // Skim the ground on the way, rising mid-flight.
             let ground = terrain.0.surface(etf.translation.x, etf.translation.z);
-            etf.translation.y = (ground + 2.0).max(wild.target.y) + (dist / 60.0).min(1.0) * 10.0;
+            etf.translation.y =
+                (ground + clearance).max(wild.target.y) + (dist / 60.0).min(1.0) * 10.0;
             let yaw = (-dir.x).atan2(-dir.z);
             etf.rotation = etf
                 .rotation
                 .slerp(Quat::from_rotation_y(yaw), 1.0 - (-5.0 * dt).exp());
         }
     } else {
+        let ground = terrain.0.surface(etf.translation.x, etf.translation.z);
+        etf.translation.y = etf.translation.y.max(ground + clearance);
         // Idle: slowly turn to face Judith when nervous.
         if let Ok(jtf) = judith.single() {
             let to = (jtf.translation - etf.translation).xz();

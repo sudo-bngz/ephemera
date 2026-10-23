@@ -26,6 +26,7 @@ bevy = { version = "0.17", default-features = false, features = [
     "zstd_rust",
     # glTF/GLB models (e.g. exported from meshy.ai) with embedded textures.
     "bevy_gltf",
+    "animation",
     "bevy_scene",
     # Bevy 0.17 registers reflected types (Transform, Mesh3d…) through this
     # feature, part of its defaults. Without it, spawning any glTF scene

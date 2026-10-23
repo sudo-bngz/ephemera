@@ -25,6 +25,7 @@
 
 use bevy::asset::io::file::FileAssetReader;
 use bevy::ecs::system::RunSystemOnce;
+use bevy::gltf::Gltf;
 use bevy::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -95,6 +96,8 @@ struct Fit {
 #[derive(Clone, Debug)]
 pub struct Model {
     scene: Handle<Scene>,
+    /// The whole glTF, for its animation clips.
+    gltf: Handle<Gltf>,
     fit: Fit,
 }
 
@@ -115,6 +118,7 @@ impl Models {
             kind,
             Model {
                 scene,
+                gltf: Handle::default(),
                 fit: kind.default_fit(),
             },
         ));
@@ -144,10 +148,11 @@ impl Swappable {
 }
 
 /// Marks a model that replaced a placeholder; the rigger reads it.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Debug)]
 pub struct SwappedModel {
     pub kind: ModelKind,
     pub rig: crate::rig::RigTuning,
+    pub gltf: Handle<Gltf>,
 }
 
 fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
@@ -208,7 +213,8 @@ fn load_models(mut commands: Commands, assets: Res<AssetServer>) {
             .unwrap_or_else(|| kind.default_fit());
         info!("model override: {file} ({fit:?})");
         let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{file}")));
-        models.loaded.push((kind, Model { scene, fit }));
+        let gltf = assets.load(format!("models/{file}"));
+        models.loaded.push((kind, Model { scene, gltf, fit }));
     }
     commands.insert_resource(models);
 }
@@ -245,6 +251,7 @@ fn swap_in_models(
                 SwappedModel {
                     kind: swap.kind,
                     rig: fit.rig,
+                    gltf: model.gltf.clone(),
                 },
                 SceneRoot(model.scene.clone()),
                 Transform::from_xyz(0.0, fit.y * swap.size.y, 0.0)
@@ -286,6 +293,7 @@ mod tests {
                     ModelKind::Ephemera,
                     Model {
                         scene: Handle::default(),
+                        gltf: Handle::default(),
                         fit: ModelKind::Ephemera.default_fit(),
                     },
                 )],
@@ -396,7 +404,7 @@ mod gltf_tests {
         )
         .init_state::<crate::state::GamePhase>()
         .init_resource::<crate::input::InputAxes>()
-        .add_plugins((ModelsPlugin, crate::rig::RigPlugin));
+        .add_plugins((ModelsPlugin, crate::rig::RigPlugin, crate::anim::AnimPlugin));
         app.finish();
         app.cleanup();
         app
@@ -481,10 +489,69 @@ mod gltf_tests {
         let wing = joints[crate::rig::wing::WING_L];
         app.update();
         let a = app.world().get::<Transform>(wing).unwrap().rotation;
-        app.world_mut().get_mut::<Flap>(creature).unwrap().phase = 2.0;
+        // Half a beat later: the other end of the stroke.
+        app.world_mut().get_mut::<Flap>(creature).unwrap().phase = 4.7;
         app.update();
         let b = app.world().get::<Transform>(wing).unwrap().rotation;
         assert!(a.angle_between(b) > 0.2, "the wing didn't move ({a} → {b})");
+    }
+
+    /// A model that arrives rigged and animated (Meshy's Animate) keeps its
+    /// skeleton: the game plays its clips, picking "Walking" once she moves.
+    #[test]
+    fn animated_model_plays_its_own_clips() {
+        use crate::anim::{Action, Clips};
+        let mut app = app();
+        let scene = load(&mut app, "animated.glb");
+        let gltf: Handle<Gltf> = app.world().resource::<AssetServer>().load("animated.glb");
+        let mut models = Models::default().with(ModelKind::Judith, scene);
+        models.loaded[0].1.gltf = gltf;
+        app.insert_resource(models);
+        let judith = app
+            .world_mut()
+            .spawn((
+                Swappable::new(ModelKind::Judith),
+                Gait::default(),
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        let adopted = run_until(&mut app, |w| w.query::<&Clips>().iter(w).count() > 0);
+        assert!(adopted, "the clips were never adopted");
+        assert_eq!(
+            app.world_mut().query::<&Rig>().iter(app.world()).count(),
+            0,
+            "an animated model must not be auto-rigged"
+        );
+        // Measured too: feet at the origin, 1.8 tall.
+        let b = app.world().get::<crate::anim::ModelBounds>(judith).unwrap();
+        assert!(
+            b.bottom.abs() < 1e-3 && (b.top - 1.8 * 1.8).abs() < 0.05,
+            "{b:?}"
+        );
+
+        for _ in 0..5 {
+            app.update();
+        }
+        let current = |w: &mut World| w.query::<&Clips>().single(w).unwrap().current;
+        assert_eq!(current(app.world_mut()), Some(Action::Idle));
+        for _ in 0..40 {
+            app.world_mut()
+                .get_mut::<Transform>(judith)
+                .unwrap()
+                .translation
+                .z -= 0.05;
+            app.update();
+        }
+        assert_eq!(current(app.world_mut()), Some(Action::Walk));
+        // The player is really running the clip.
+        let w = app.world_mut();
+        let (player, clips) = {
+            let c = w.query::<&Clips>().single(w).unwrap();
+            (c.player, c.actions.clone())
+        };
+        let p = w.get::<AnimationPlayer>(player).unwrap();
+        assert!(p.is_playing_animation(clips[&Action::Walk]));
     }
 
     /// A static T-posed model becomes a skinned humanoid that walks.

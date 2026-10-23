@@ -423,7 +423,7 @@ fn setup(
         let cloth = coat.glow.mix(&Color::srgb(0.3, 0.25, 0.2), 0.5);
         let rider =
             crate::components::spawn_rider(&mut commands, &mut meshes, &mut materials, cloth);
-        mount(&mut commands, rider, rival);
+        mount(&mut commands, rider, rival, None);
     }
 
     spawn_speed_lines(&mut commands, &mut meshes, &mut materials, &mut rng);
@@ -507,18 +507,26 @@ pub(crate) fn spawn_player_rider(
     );
     // Judith in the saddle.
     let saddle = crate::components::spawn_judith(commands, meshes, materials, Vec3::ZERO);
-    mount(commands, saddle, player);
+    mount(commands, saddle, player, None);
     player
 }
 
-/// Seats a figure on an Ephemera. The riding pose drops the hips by about
-/// a quarter of the height, so the figure's feet-level origin sits below
-/// the saddle and its pelvis lands on it.
-pub(crate) fn mount(commands: &mut Commands, rider: Entity, ephemera: Entity) {
+/// Seats a figure on an Ephemera: on its model's saddle if that is known
+/// (`anim::seat_riders` moves it there once the model loads), else on the
+/// placeholder's thorax.
+pub(crate) fn mount(
+    commands: &mut Commands,
+    rider: Entity,
+    ephemera: Entity,
+    bounds: Option<&crate::anim::ModelBounds>,
+) {
     commands
         .entity(rider)
         .remove::<Velocity>()
-        .insert(Transform::from_xyz(0.0, 0.1, -0.5).with_scale(Vec3::splat(0.9)))
+        .insert(
+            Transform::from_translation(crate::anim::saddle_seat(bounds))
+                .with_scale(Vec3::splat(0.9)),
+        )
         .insert(ChildOf(ephemera));
 }
 
@@ -708,6 +716,7 @@ pub(crate) fn integrate(
         &mut Flap,
         Option<&Player>,
         Option<&Parked>,
+        Option<&crate::anim::ModelBounds>,
     )>,
     mut reeds: Query<(&GlobalTransform, &mut ReedClump)>,
     obstacles: Query<(&GlobalTransform, &Obstacle)>,
@@ -719,9 +728,13 @@ pub(crate) fn integrate(
     if dt <= f32::EPSILON {
         return;
     }
-    for (mut tf, mut r, input, mut vel, mut flap, player, parked) in &mut q {
+    for (mut tf, mut r, input, mut vel, mut flap, player, parked, bounds) in &mut q {
         let is_player = player.is_some();
         let p = tf.translation;
+        // How far the creature's lowest point hangs below its origin: it
+        // rests on its legs, never on its belly.
+        let clearance = bounds.map(|b| -b.bottom).unwrap_or(0.0);
+        let min_alt = MIN_ALT.max(clearance + 0.35);
 
         // --- waiting for its rider ------------------------------------
         if let Some(parked) = parked {
@@ -737,14 +750,20 @@ pub(crate) fn integrate(
                     let step = (r.speed * dt).min(to.length());
                     let mut n = p + dir * step;
                     let ahead = terrain.0.surface(n.x, n.z).max(ground);
-                    n.y += (ahead + 3.0 - n.y) * (1.0 - (-3.0 * dt).exp());
+                    n.y += (ahead + clearance + 2.5 - n.y) * (1.0 - (-3.0 * dt).exp());
                     flap.intensity = 0.6;
                     n
                 }
                 _ => {
                     r.speed *= 1.0 - 3.0 * dt;
                     let mut n = p;
-                    n.y += (ground + 0.7 - n.y) * (1.0 - (-2.5 * dt).exp());
+                    let rest = ground
+                        + if bounds.is_some() {
+                            clearance + 0.1
+                        } else {
+                            0.7
+                        };
+                    n.y += (rest - n.y) * (1.0 - (-2.5 * dt).exp());
                     flap.intensity = 0.1;
                     n
                 }
@@ -825,8 +844,8 @@ pub(crate) fn integrate(
         // Altitude is clamped softly: pushing into the limits bleeds pitch.
         let mut next_pos = p + v * dt;
         let ground = terrain.0.surface(next_pos.x, next_pos.z);
-        if next_pos.y < ground + MIN_ALT {
-            next_pos.y = ground + MIN_ALT;
+        if next_pos.y < ground + min_alt {
+            next_pos.y = ground + min_alt;
             if r.pitch < 0.0 {
                 r.pitch *= 0.3;
             }

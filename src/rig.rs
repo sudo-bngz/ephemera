@@ -404,17 +404,26 @@ impl Pose {
     /// A walk (amount 0–1) or a run (above 1), at gait phase `phase`.
     pub fn walk(phase: f32, amount: f32) -> Pose {
         let s = phase.sin();
+        let c = phase.cos();
         let a = amount.clamp(0.0, 1.6);
+        // The swing leg bends as it comes through; the elbow follows the arm.
+        let bend = |x: f32| (x * 0.5 + 0.5).powi(2);
         Pose {
-            drop: 0.015 * a * (2.0 * phase).cos().abs(),
-            spine_pitch: 0.06 * a,
-            spine_yaw: 0.08 * a * s,
-            shoulder_flex: [-0.45 * a * s, 0.45 * a * s],
-            shoulder_abduct: [0.1; 2],
-            elbow: [0.25 + 0.25 * a; 2],
-            hip_flex: [0.5 * a * s, -0.5 * a * s],
-            knee: [0.9 * a * (-s).max(0.0) + 0.1, 0.9 * a * s.max(0.0) + 0.1],
-            ..Default::default()
+            drop: 0.012 * a * (2.0 * phase).cos().abs(),
+            spine_pitch: 0.05 * a + 0.03 * a * (2.0 * phase).sin(),
+            spine_roll: 0.04 * a * c,
+            spine_yaw: 0.1 * a * s,
+            head_yaw: -0.05 * a * s,
+            head_pitch: 0.02 * a * (2.0 * phase).sin(),
+            shoulder_flex: [-0.4 * a * s, 0.4 * a * s],
+            shoulder_abduct: [0.1 + 0.03 * a * c, 0.1 - 0.03 * a * c],
+            elbow: [0.2 + 0.4 * a * bend(-s), 0.2 + 0.4 * a * bend(s)],
+            hip_flex: [0.45 * a * s, -0.45 * a * s],
+            hip_abduct: [0.03 * a * c, -0.03 * a * c],
+            knee: [
+                0.1 + 1.0 * a * bend(-s) * (0.3 + 0.7 * (-c).max(0.0)),
+                0.1 + 1.0 * a * bend(s) * (0.3 + 0.7 * c.max(0.0)),
+            ],
         }
     }
 
@@ -509,16 +518,18 @@ impl Pose {
 pub fn wing_rotations(phase: f32, intensity: f32, t: f32) -> [Quat; wing::COUNT] {
     use wing::*;
     let mut q = [Quat::IDENTITY; COUNT];
-    let amp = 0.12 + 0.6 * intensity;
-    let beat = phase.sin() * amp;
+    let amp = 0.1 + 0.45 * intensity;
+    // The downstroke is quicker than the upstroke.
+    let s = phase.sin();
+    let beat = (s + 0.25 * (2.0 * phase).sin()) * amp;
     // A figure-eight: the stroke sweeps a little fore and aft too.
-    let sweep = phase.cos() * amp * 0.3;
+    let sweep = phase.cos() * amp * 0.2;
     q[WING_L] = Quat::from_rotation_y(sweep) * Quat::from_rotation_z(beat);
     q[WING_R] = Quat::from_rotation_y(-sweep) * Quat::from_rotation_z(-beat);
-    // Legs dangle at rest and tuck back in flight.
+    // Legs dangle at rest and draw up a little in flight.
     let twitch = (t * 3.1).sin() * 0.06 * (1.0 - intensity);
-    q[LEGS_L] = Quat::from_rotation_x(-intensity + twitch) * Quat::from_rotation_z(0.1);
-    q[LEGS_R] = Quat::from_rotation_x(-intensity - twitch) * Quat::from_rotation_z(-0.1);
+    q[LEGS_L] = Quat::from_rotation_x(-0.45 * intensity + twitch) * Quat::from_rotation_z(0.05);
+    q[LEGS_R] = Quat::from_rotation_x(-0.45 * intensity - twitch) * Quat::from_rotation_z(-0.05);
     q[ABDOMEN] = Quat::from_rotation_x(0.07 * (phase * 0.5).sin() - 0.1 * intensity);
     q[HEAD] = Quat::from_rotation_y(0.12 * (t * 0.7).sin() * (1.0 - intensity));
     q
@@ -761,13 +772,13 @@ pub struct Gait {
     pub pose: Pose,
 }
 
-/// Already rigged (or found not riggable).
+/// Already rigged (or found not riggable, or animated by its own clips).
 #[derive(Component)]
-struct Rigged;
+pub struct Rigged;
 
 /// Skinned copies of models' meshes, shared by every instance of a model.
 #[derive(Resource, Default)]
-struct RigCache {
+pub(crate) struct RigCache {
     meshes: HashMap<AssetId<Mesh>, (Handle<Mesh>, Handle<SkinnedMeshInverseBindposes>)>,
 }
 
@@ -835,11 +846,12 @@ fn descendants_with_mesh(
 
 /// Rigs models as soon as their scene has spawned and their meshes loaded.
 #[allow(clippy::too_many_arguments)]
-fn rig_models(
+pub(crate) fn rig_models(
     mut commands: Commands,
     swapped: Query<(Entity, &SwappedModel, &Transform, &ChildOf), Without<Rigged>>,
     children: Query<&Children>,
     has_mesh: Query<&Mesh3d>,
+    skinned: Query<(), With<SkinnedMesh>>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -859,6 +871,16 @@ fn rig_models(
         descendants_with_mesh(root, &children, &has_mesh, &mut mesh_entities);
         if mesh_entities.is_empty() {
             continue; // the scene hasn't spawned yet
+        }
+        if mesh_entities.iter().any(|e| skinned.contains(*e)) {
+            // It came with a skeleton of its own (rigged in Meshy, Blender…):
+            // its clips animate it (`anim.rs`), not this rigger.
+            info!(
+                "{:?} model is already rigged; using its own skeleton",
+                swap.kind
+            );
+            commands.entity(root).insert(Rigged);
+            continue;
         }
         let handles: Vec<Handle<Mesh>> = mesh_entities
             .iter()
@@ -1029,7 +1051,7 @@ fn drive_gaits(
             }
         };
         gait.last = Some(p);
-        gait.pose = gait.pose.lerp(&target, 1.0 - (-10.0 * dt).exp());
+        gait.pose = gait.pose.lerp(&target, 1.0 - (-7.0 * dt).exp());
     }
 }
 

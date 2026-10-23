@@ -13,6 +13,7 @@
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
+use crate::anim::ModelBounds;
 use crate::camera::{CameraMode, ChaseCamera};
 use crate::components::{CameraTarget, Ephemera, Judith, Velocity};
 use crate::input::InputAxes;
@@ -56,7 +57,13 @@ fn interact(
     axes: Res<InputAxes>,
     terrain: Res<WorldTerrain>,
     mut ephemera: Query<
-        (Entity, &Transform, Option<&mut Parked>, Has<AutoLand>),
+        (
+            Entity,
+            &Transform,
+            Option<&mut Parked>,
+            Has<AutoLand>,
+            Option<&ModelBounds>,
+        ),
         (With<Player>, With<Ephemera>),
     >,
     judith: Query<(Entity, &GlobalTransform, Has<Walker>), With<Judith>>,
@@ -65,7 +72,7 @@ fn interact(
     if !axes.interact_pressed {
         return;
     }
-    let (Ok((eph, etf, parked, landing)), Ok((jud, jtf, on_foot))) =
+    let (Ok((eph, etf, parked, landing, bounds)), Ok((jud, jtf, on_foot))) =
         (ephemera.single_mut(), judith.single())
     else {
         return;
@@ -74,7 +81,7 @@ fn interact(
         let d = (jtf.translation() - etf.translation).xz().length();
         if d < MOUNT_REACH {
             // Back in the saddle.
-            mount(&mut commands, jud, eph);
+            mount(&mut commands, jud, eph, bounds);
             commands
                 .entity(jud)
                 .remove::<(Walker, Stance, CameraTarget)>();
@@ -101,11 +108,16 @@ fn land(
     mut commands: Commands,
     time: Res<Time>,
     terrain: Res<WorldTerrain>,
-    mut ephemera: Query<(Entity, &mut Transform, &Rider), (With<Player>, With<AutoLand>)>,
-    judith: Query<Entity, (With<Judith>, Without<Walker>)>,
+    mut ephemera: Query<
+        (Entity, &mut Transform, &Rider, Option<&ModelBounds>),
+        (With<Player>, With<AutoLand>),
+    >,
+    judith: Query<(Entity, Option<&ModelBounds>), (With<Judith>, Without<Walker>)>,
     mut cams: Query<&mut ChaseCamera>,
 ) {
-    let (Ok((eph, mut etf, rider)), Ok(jud)) = (ephemera.single_mut(), judith.single()) else {
+    let (Ok((eph, mut etf, rider, bounds)), Ok((jud, jbounds))) =
+        (ephemera.single_mut(), judith.single())
+    else {
         return;
     };
     let p = etf.translation;
@@ -113,7 +125,8 @@ fn land(
     if rider.speed > 2.5 {
         return;
     }
-    if p.y > ground + 1.8 {
+    let clearance = bounds.map(|b| -b.bottom).unwrap_or(0.0);
+    if p.y > ground + clearance + 1.4 {
         // Hovering: the flight model only sinks under way, so let it down.
         etf.translation.y -= 4.5 * time.delta_secs();
         return;
@@ -128,8 +141,11 @@ fn land(
         floor.max(SEA_LEVEL - 1.1)
     };
     let yaw = (-right.x).atan2(-right.z);
+    let y = y - jbounds.map(|b| b.bottom).unwrap_or(0.0);
     commands.entity(jud).remove::<ChildOf>().insert((
-        Transform::from_translation(at.with_y(y)).with_rotation(Quat::from_rotation_y(yaw)),
+        Transform::from_translation(at.with_y(y))
+            .with_rotation(Quat::from_rotation_y(yaw))
+            .with_scale(Vec3::ONE),
         Velocity::default(),
         Walker {
             yaw,
@@ -185,11 +201,22 @@ fn walk(
     terrain: Res<WorldTerrain>,
     cams: Query<&ChaseCamera>,
     obstacles: Query<(&GlobalTransform, &Obstacle)>,
-    mut q: Query<(&mut Transform, &mut Velocity, &mut Walker, &mut Stance), With<Judith>>,
+    mut q: Query<
+        (
+            &mut Transform,
+            &mut Velocity,
+            &mut Walker,
+            &mut Stance,
+            Option<&ModelBounds>,
+        ),
+        With<Judith>,
+    >,
 ) {
-    let Ok((mut tf, mut vel, mut w, mut stance)) = q.single_mut() else {
+    let Ok((mut tf, mut vel, mut w, mut stance, bounds)) = q.single_mut() else {
         return;
     };
+    // Her model's feet may sit a little under its origin.
+    let feet = bounds.map(|b| b.bottom).unwrap_or(0.0);
     let dt = time.delta_secs().min(1.0 / 30.0);
     if dt <= f32::EPSILON {
         return;
@@ -201,7 +228,7 @@ fn walk(
     let right = Vec3::new(-forward.z, 0.0, forward.x);
     let wish = (forward * axes.walk.y + right * axes.walk.x).clamp_length_max(1.0);
 
-    let p = tf.translation;
+    let p = tf.translation + Vec3::Y * feet;
     let ground = terrain.0.height(p.x, p.z);
     let depth = SEA_LEVEL - ground;
     w.swimming = depth > 1.1;
@@ -311,7 +338,7 @@ fn walk(
         w.yaw += d * (1.0 - (-12.0 * dt).exp());
     }
     vel.0 = (next - p) / dt;
-    tf.translation = next;
+    tf.translation = next - Vec3::Y * feet;
     tf.rotation = Quat::from_rotation_y(w.yaw);
 
     *stance = if w.swimming {

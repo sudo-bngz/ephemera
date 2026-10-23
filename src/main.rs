@@ -15,6 +15,7 @@
     clippy::collapsible_if
 )]
 
+mod anim;
 mod art;
 mod audio;
 mod camera;
@@ -81,6 +82,7 @@ impl Plugin for GamePlugin {
             art::ArtPlugin,
             audio::SoundPlugin,
             rig::RigPlugin,
+            anim::AnimPlugin,
             creature::CreaturePlugin,
             camera::CameraPlugin,
             hud::HudPlugin,
@@ -145,6 +147,9 @@ mod smoke {
         .init_asset::<Image>()
         .init_asset::<AudioSource>()
         .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>()
+        .init_asset::<bevy::gltf::Gltf>()
+        .init_asset::<AnimationGraph>()
+        .init_asset::<AnimationClip>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )))

@@ -181,9 +181,10 @@ fn animate(
 ) {
     let dt = time.delta_secs();
     for (mut flap, children) in &mut flaps {
-        // Beat rate rises steeply with intensity: resting insects barely
-        // tremble, racing ones become a blur.
-        let hz = 2.0 + 26.0 * flap.intensity;
+        // Beat rate rises with intensity: a resting creature's wings stir,
+        // a racing one's beat hard — but readable on a creature this size,
+        // not a blur.
+        let hz = 1.6 + 6.0 * flap.intensity;
         flap.phase = (flap.phase + dt * hz * std::f32::consts::TAU) % std::f32::consts::TAU;
         let beat = flap.phase.sin();
         let amp = 0.08 + 0.75 * flap.intensity;

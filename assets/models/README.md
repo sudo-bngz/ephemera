@@ -82,13 +82,40 @@ cargo run --release --manifest-path tools/meshy-gen/Cargo.toml
 > **mesa**: weathered alien rock spire, layered sediment, flat top, stylized,
 > low-poly
 
-### Animation: the game rigs the models itself
+### Animation
 
-A Meshy model is one static mesh, and Meshy only rigs humanoids and
-quadrupeds. So when `ephemera.glb` or `judith.glb` loads, the game rigs it:
-it reads the mesh's shape, places a skeleton, weights every vertex to the
-bones by where it sits, and turns it into a GPU-skinned mesh. The terminal
-says `rigged Ephemera model: 7 bones, … vertices`.
+There are two ways a model moves, and the game picks by what the file
+contains:
+
+**1. It brings its own clips (best, humanoids).** Meshy's *Animate* rigs a
+humanoid and lets you add actions from its animation library; the GLB then
+carries a skeleton and one clip per action. The game plays those clips as
+they are, cross-fading as Judith idles, walks, runs, crouches, jumps, swims
+or sits in the saddle. Clips are matched to actions by name (`Idle`,
+`Walking`, `Running`, `Crouch…`, `Jump`, `Swimming`, `Sitting`…), and the
+terminal lists what it found: `Judith model brings 7 clip(s): …`.
+
+`tools/meshy-gen` does this for you when a section in `meshy-prompts.txt`
+has an `animate =` line (see `[judith]`): after the model, it calls Meshy's
+rigging API, looks the actions up in the animation library, and replaces
+`judith.glb` with the rigged, animated one (the static model is kept as
+`judith.static.glb`). An existing `judith.glb` without clips is rigged on
+the next run — no need to regenerate the model. By hand: open the model in
+Meshy → **Animate** → rig it → add the actions → download the GLB with all
+of them as `judith.glb`.
+
+**2. The game rigs it (the Ephemera).** Meshy only rigs humanoids, so a
+static `ephemera.glb` is rigged at load: the game reads the mesh's shape,
+places a skeleton, weights every vertex to the bones by where it sits, and
+turns it into a GPU-skinned mesh. The terminal says
+`rigged Ephemera model: 7 bones, … vertices`. (A static `judith.glb` gets
+the same treatment, with a humanoid skeleton — it works, but her own clips
+look far better.)
+
+The game also measures every model: its lowest point keeps the creature on
+its legs (not its belly) and Judith's feet on the floor, and the top of the
+body at its middle is the **saddle** where she sits — so the `y=` offset in
+`models.cfg` only needs to be roughly right.
 
 - **The Ephemera**: the wide, thin parts above the body's middle are the
   wings (they beat, in a figure-eight); the parts hanging below are the legs

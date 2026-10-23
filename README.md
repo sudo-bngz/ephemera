@@ -222,6 +222,7 @@ export MESHY_API_KEY=msy_...
 cargo run --release --manifest-path tools/meshy-gen/Cargo.toml              # all missing
 cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- ephemera  # just one
 cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- --dry-run # show prompts
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- judith    # rig + animate an existing judith.glb
 ```
 
 API keys need a paid Meshy plan. Without one, the same command prints a step-by-step
@@ -233,6 +234,12 @@ Prompts live in `assets/models/meshy-prompts.txt`. Each model is a preview task
 downloaded as GLB. Models run in parallel; task ids are recorded so an interrupted
 run resumes without paying twice, and a task Meshy fails is started over on the next
 run.
+
+Judith's section has an `animate =` line: after her model, the tool rigs her with
+Meshy's rigging API and fetches her actions (idle, walking, running, crouch, jump,
+swimming, sitting) from Meshy's animation library, so `judith.glb` arrives with a
+skeleton and a clip for each, which the game plays and cross-fades. Meshy only rigs
+humanoids; the Ephemera is rigged by the game itself at load (`rig.rs`).
 
 ## Roadmap
 

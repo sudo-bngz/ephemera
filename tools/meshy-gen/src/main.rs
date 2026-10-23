@@ -11,6 +11,13 @@
 //! then a *refine* task (textures), then the GLB is downloaded to
 //! `assets/models/<name>.glb`, where the game picks it up on the next run.
 //!
+//! A section with `animate = idle, walking, running, …` goes on to Meshy's
+//! *rigging* (humanoids only) and *animation* APIs: the character is rigged,
+//! those actions are picked from Meshy's animation library by name, and the
+//! GLB is replaced by the rigged one carrying every clip. The game plays the
+//! clips (`anim.rs`) instead of rigging the model itself. A model that
+//! already exists but has no clips yet is rigged on the next run.
+//!
 //! Every task id is recorded in `assets/models/.meshy-tasks`, so an
 //! interrupted run resumes instead of paying for the same model twice.
 //! Models run in parallel; `--force` regenerates models that already exist.
@@ -37,6 +44,10 @@ struct Spec {
     texture: Option<String>,
     polycount: u32,
     pose: Option<String>,
+    /// Actions to fetch from Meshy's animation library, by name.
+    animate: Vec<String>,
+    /// Character height for rigging, metres.
+    height: f32,
 }
 
 /// Parses `meshy-prompts.txt`: `[name]` sections with `key = value` lines.
@@ -57,6 +68,8 @@ fn parse_prompts(text: &str) -> Result<Vec<Spec>, String> {
                 texture: None,
                 polycount: 20_000,
                 pose: None,
+                animate: Vec::new(),
+                height: 1.7,
             });
             last_key = None;
             continue;
@@ -95,6 +108,18 @@ fn parse_prompts(text: &str) -> Result<Vec<Spec>, String> {
                     .map_err(|_| format!("line {line_no}: polycount must be a number"))?
             }
             "pose" => spec.pose = Some(v.to_string()).filter(|p| !p.is_empty()),
+            "animate" => {
+                spec.animate = v
+                    .split(',')
+                    .map(|a| a.trim().to_string())
+                    .filter(|a| !a.is_empty())
+                    .collect()
+            }
+            "height" => {
+                spec.height = v
+                    .parse()
+                    .map_err(|_| format!("line {line_no}: height must be a number"))?
+            }
             _ => return Err(format!("line {line_no}: unknown key `{k}`")),
         }
         last_key = Some(k.to_string());
@@ -112,8 +137,32 @@ fn parse_prompts(text: &str) -> Result<Vec<Spec>, String> {
         if !(100..=300_000).contains(&s.polycount) {
             return Err(format!("[{}] polycount must be 100–300000", s.name));
         }
+        if s.animate.len() > 10 {
+            return Err(format!("[{}] at most 10 animations per model", s.name));
+        }
     }
     Ok(out)
+}
+
+/// Whether a GLB on disk carries animation clips (its JSON chunk has an
+/// `animations` array).
+fn has_animations(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    // GLB: 12-byte header, then chunks of (length, type, data); the first
+    // chunk is the JSON.
+    if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
+        return false;
+    }
+    let len = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    let Some(json) = bytes.get(20..20 + len) else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(json)
+        .ok()
+        .and_then(|v| v["animations"].as_array().map(|a| !a.is_empty()))
+        .unwrap_or(false)
 }
 
 /// `name stage task_id` lines, so runs can resume.
@@ -172,11 +221,24 @@ struct Api {
     agent: ureq::Agent,
 }
 
+/// Which Meshy API a stage talks to.
+fn endpoint(stage: &str) -> &'static str {
+    match stage {
+        "rig" => "/openapi/v1/rigging",
+        "anim" => "/openapi/v1/animations",
+        _ => "/openapi/v2/text-to-3d",
+    }
+}
+
 impl Api {
     fn create(&self, body: Value) -> Result<String, String> {
+        self.create_at("preview", body)
+    }
+
+    fn create_at(&self, stage: &str, body: Value) -> Result<String, String> {
         let resp = self
             .agent
-            .post(&format!("{}/openapi/v2/text-to-3d", self.base))
+            .post(&format!("{}{}", self.base, endpoint(stage)))
             .set("Authorization", &format!("Bearer {}", self.key))
             .send_json(body)
             .map_err(describe)?;
@@ -187,14 +249,64 @@ impl Api {
             .ok_or_else(|| format!("no task id in response: {v}"))
     }
 
-    fn task(&self, id: &str) -> Result<Value, String> {
+    fn task(&self, stage: &str, id: &str) -> Result<Value, String> {
+        self.get(&format!("{}/{id}", endpoint(stage)))
+    }
+
+    fn get(&self, path: &str) -> Result<Value, String> {
         self.agent
-            .get(&format!("{}/openapi/v2/text-to-3d/{id}", self.base))
+            .get(&format!("{}{path}", self.base))
             .set("Authorization", &format!("Bearer {}", self.key))
             .call()
             .map_err(describe)?
             .into_json()
             .map_err(|e| e.to_string())
+    }
+
+    /// Looks an action up in Meshy's animation library by name: the best
+    /// match is the shortest name containing the words asked for.
+    fn find_action(&self, name: &str) -> Result<(u64, String), String> {
+        let v = self.get(&format!(
+            "/openapi/v1/animations/library?search={}&page_size=50",
+            name.replace(' ', "%20")
+        ))?;
+        let items = v["result"]
+            .as_array()
+            .or_else(|| v["result"]["items"].as_array())
+            .or_else(|| v["result"]["data"].as_array())
+            .or_else(|| v["data"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let wanted = name.to_ascii_lowercase();
+        let mut best: Option<(usize, u64, String)> = None;
+        for it in &items {
+            let n = it["name"].as_str().unwrap_or("");
+            let Some(id) = it["action_id"].as_u64() else {
+                continue;
+            };
+            let ln = n.to_ascii_lowercase();
+            let score = if ln == wanted {
+                0
+            } else if ln.starts_with(&wanted) {
+                1 + ln.len()
+            } else if ln.contains(&wanted) {
+                100 + ln.len()
+            } else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|b| score < b.0) {
+                best = Some((score, id, n.to_string()));
+            }
+        }
+        best.map(|(_, id, n)| (id, n))
+            .or_else(|| {
+                items.first().and_then(|it| {
+                    it["action_id"]
+                        .as_u64()
+                        .map(|id| (id, it["name"].as_str().unwrap_or("?").to_string()))
+                })
+            })
+            .ok_or_else(|| format!("no animation named like `{name}` in Meshy's library"))
     }
 
     /// Polls until the task finishes. Returns the final task JSON.
@@ -203,7 +315,7 @@ impl Api {
     fn wait(&self, name: &str, stage: &str, id: &str, poll: Duration) -> Result<Value, Wait> {
         let mut last = -1;
         loop {
-            let t = self.task(id).map_err(Wait::Io)?;
+            let t = self.task(stage, id).map_err(Wait::Io)?;
             let status = t["status"].as_str().unwrap_or("?");
             let progress = t["progress"].as_i64().unwrap_or(0);
             if progress != last {
@@ -354,8 +466,104 @@ fn generate(
         path.display(),
         bytes as f64 / 1e6
     );
+    if spec.animate.is_empty() {
+        ledger.lock().unwrap().clear(name);
+        return Ok(());
+    }
+    animate(api, ledger, spec, out_dir, Some(&refine), poll)
+}
+
+/// Rigs a character and gives it the clips its spec asks for, replacing
+/// `<name>.glb` with the rigged, animated one. The rig is made from the
+/// refine task when there is one, else from the GLB on disk.
+fn animate(
+    api: &Api,
+    ledger: &Mutex<Ledger>,
+    spec: &Spec,
+    out_dir: &Path,
+    refine: Option<&str>,
+    poll: Duration,
+) -> Result<(), String> {
+    let name = spec.name.as_str();
+    let path = out_dir.join(format!("{name}.glb"));
+
+    let known_rig = ledger.lock().unwrap().get(name, "rig");
+    let rig = match known_rig {
+        Some(id) => {
+            println!("  {name:<10} resuming rig {id}");
+            id
+        }
+        None => {
+            let mut body = json!({ "height_meters": spec.height });
+            match refine.or(ledger.lock().unwrap().get(name, "refine").as_deref()) {
+                Some(task) => body["input_task_id"] = json!(task),
+                None => {
+                    // Rig the file we have: as a data URI (≤ 100 MB).
+                    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                    if bytes.len() > 100 * 1024 * 1024 {
+                        return Err("GLB over 100 MB: too big to upload for rigging".into());
+                    }
+                    body["model_url"] =
+                        json!(format!("data:model/gltf-binary;base64,{}", base64(&bytes)));
+                }
+            }
+            let id = api.create_at("rig", body)?;
+            ledger.lock().unwrap().set(name, "rig", &id);
+            id
+        }
+    };
+    wait_or_forget(api, ledger, name, "rig", &rig, poll)?;
+
+    let known_anim = ledger.lock().unwrap().get(name, "anim");
+    let anim = match known_anim {
+        Some(id) => id,
+        None => {
+            let mut ids = Vec::new();
+            for a in &spec.animate {
+                let (id, found) = api.find_action(a)?;
+                println!("  {name:<10} animation `{a}` → #{id} \"{found}\"");
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            let id = api.create_at(
+                "anim",
+                json!({ "rig_task_id": rig, "action_ids": ids }),
+            )?;
+            ledger.lock().unwrap().set(name, "anim", &id);
+            id
+        }
+    };
+    let done = wait_or_forget(api, ledger, name, "anim", &anim, poll)?;
+    let url = done["result"]["animation_glb_url"]
+        .as_str()
+        .filter(|u| !u.is_empty())
+        .ok_or("animation succeeded but returned no GLB url")?;
+    // Keep the static model next to the animated one.
+    let _ = fs::copy(&path, out_dir.join(format!("{name}.static.glb")));
+    let bytes = api.download(url, &path)?;
+    println!(
+        "  {name:<10} ✓ rigged + {} clip(s): {} ({:.1} MB)",
+        spec.animate.len(),
+        path.display(),
+        bytes as f64 / 1e6
+    );
     ledger.lock().unwrap().clear(name);
     Ok(())
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 fn main() {
@@ -417,30 +625,38 @@ fn main() {
             std::process::exit(2);
         }
     }
-    let todo: Vec<Spec> = specs
+    // Models to make from scratch, and finished models still to animate.
+    let (mut todo, mut to_animate): (Vec<Spec>, Vec<Spec>) = (Vec::new(), Vec::new());
+    for s in specs
         .into_iter()
         .filter(|s| names.is_empty() || names.contains(&s.name))
-        .filter(|s| {
-            let exists = out_dir.join(format!("{}.glb", s.name)).exists();
-            if exists && !force {
-                println!("  {:<10} exists, skipping (--force to regenerate)", s.name);
-            }
-            force || !exists
-        })
-        .collect();
+    {
+        let path = out_dir.join(format!("{}.glb", s.name));
+        if force || !path.exists() {
+            todo.push(s);
+        } else if !s.animate.is_empty() && !has_animations(&path) {
+            println!("  {:<10} exists; rigging and animating it", s.name);
+            to_animate.push(s);
+        } else {
+            println!("  {:<10} exists, skipping (--force to regenerate)", s.name);
+        }
+    }
 
-    if todo.is_empty() {
+    if todo.is_empty() && to_animate.is_empty() {
         println!("nothing to generate");
         return;
     }
     if dry_run {
-        for s in &todo {
+        for s in todo.iter().chain(&to_animate) {
             println!(
                 "\n[{}] {} tris, pose {:?}\n  {}",
                 s.name, s.polycount, s.pose, s.prompt
             );
             if let Some(t) = &s.texture {
                 println!("  texture: {t}");
+            }
+            if !s.animate.is_empty() {
+                println!("  animate: {} ({} m tall)", s.animate.join(", "), s.height);
             }
         }
         return;
@@ -452,13 +668,15 @@ fn main() {
     else {
         // No key (API keys need a paid Meshy plan): guide the same work
         // through the web app instead, which the free plan can do.
+        todo.append(&mut to_animate);
         print!("{}", manual_guide(&todo, &out_dir));
         return;
     };
     println!(
         "{} model(s) via {base} (ai_model {ai_model}): {}",
-        todo.len(),
+        todo.len() + to_animate.len(),
         todo.iter()
+            .chain(&to_animate)
             .map(|s| s.name.as_str())
             .collect::<Vec<_>>()
             .join(", ")
@@ -475,7 +693,9 @@ fn main() {
 
     let handles: Vec<_> = todo
         .into_iter()
-        .map(|spec| {
+        .map(|s| (s, false))
+        .chain(to_animate.into_iter().map(|s| (s, true)))
+        .map(|(spec, only_animate)| {
             let (api, ledger, out_dir, ai_model) = (
                 api.clone(),
                 ledger.clone(),
@@ -483,7 +703,11 @@ fn main() {
                 ai_model.clone(),
             );
             thread::spawn(move || {
-                let r = generate(&api, &ledger, &spec, &out_dir, &ai_model, poll);
+                let r = if only_animate {
+                    animate(&api, &ledger, &spec, &out_dir, None, poll)
+                } else {
+                    generate(&api, &ledger, &spec, &out_dir, &ai_model, poll)
+                };
                 if let Err(e) = &r {
                     eprintln!("  {:<10} ✗ {e}", spec.name);
                 }
@@ -528,6 +752,12 @@ fn manual_guide(todo: &[Spec], out_dir: &Path) -> String {
         if let Some(t) = &s.texture {
             g.push_str(&format!("   texture   {t}\n"));
         }
+        if !s.animate.is_empty() {
+            g.push_str(&format!(
+                "   animate   open the model → Animate → Rig it, then add these actions and\n             download the GLB with all of them: {}\n",
+                s.animate.join(", ")
+            ));
+        }
     }
     g.push_str(
         "\nRun the game afterwards: each GLB replaces its placeholder automatically.\n\
@@ -553,6 +783,33 @@ mod tests {
         assert_eq!(specs[0].pose.as_deref(), Some("t-pose"));
         assert_eq!(specs[1].texture.as_deref(), Some("y"));
         assert_eq!(specs[1].polycount, 20_000);
+        let s = parse_prompts("[j]\nprompt = p\nanimate = idle, walking ,run\nheight = 1.6\n").unwrap();
+        assert_eq!(s[0].animate, ["idle", "walking", "run"]);
+        assert_eq!(s[0].height, 1.6);
+    }
+
+    #[test]
+    fn glb_animation_detection() {
+        let dir = std::env::temp_dir().join(format!("meshy-gen-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let glb = |json: &str| {
+            let mut b = b"glTF".to_vec();
+            b.extend_from_slice(&2u32.to_le_bytes());
+            b.extend_from_slice(&((20 + json.len()) as u32).to_le_bytes());
+            b.extend_from_slice(&(json.len() as u32).to_le_bytes());
+            b.extend_from_slice(b"JSON");
+            b.extend_from_slice(json.as_bytes());
+            b
+        };
+        let a = dir.join("a.glb");
+        fs::write(&a, glb(r#"{"asset":{"version":"2.0"},"animations":[{"name":"Walk"}]}"#)).unwrap();
+        let b = dir.join("b.glb");
+        fs::write(&b, glb(r#"{"asset":{"version":"2.0"}}"#)).unwrap();
+        assert!(has_animations(&a));
+        assert!(!has_animations(&b));
+        assert!(!has_animations(&dir.join("missing.glb")));
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
     }
 
     #[test]
