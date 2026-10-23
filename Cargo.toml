@@ -1,0 +1,45 @@
+[package]
+name = "ephemera"
+version = "0.1.0"
+edition = "2024"
+description = "Arcade racing on the back of a giant mosquito — capture, tame, race."
+license = "MIT"
+repository = "https://github.com/sudo-bngz/ephemera"
+
+[dependencies]
+# Lean feature set: no audio/gamepad crates yet, so the build has no native
+# system dependencies beyond what macOS ships. `x11` only matters on Linux.
+bevy = { version = "0.17", default-features = false, features = [
+    "bevy_winit",
+    "bevy_window",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_ui",
+    "bevy_text",
+    "bevy_state",
+    "bevy_asset",
+    "bevy_log",
+    "default_font",
+    "multi_threaded",
+    "tonemapping_luts",
+    "zstd_rust",
+    "x11",
+] }
+rand = "0.8"
+
+[features]
+default = []
+# `cargo run --features dev` → dynamic linking for much faster iteration.
+dev = ["bevy/dynamic_linking", "bevy/file_watcher"]
+
+# Keep dependencies optimised even in debug: Bevy is unplayable otherwise.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
