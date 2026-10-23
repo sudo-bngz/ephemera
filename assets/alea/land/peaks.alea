@@ -1,0 +1,37 @@
+// Peaks — a mountain range. The only land that climbs above the fog.
+//
+// `range: [0, 5]` tells the game how high the picture goes: with the usual
+// `[0, 1]` white is +42 m; here a value of 5 is +282 m (see README.md).
+
+work Peaks {
+  // Ridges are the fold lines of a noise, sharpened; a finer fold roughens them.
+  let fold   = 1 - abs(noise(x * 2.2, y * 2.2, 0))
+  let fold2  = 1 - abs(noise(x * 5 + 3, y * 5 + 1, 0))
+  let ridges = fold * fold * 0.72 + fold2 * fold2 * 0.28
+  // Where the range stands; it dies away towards the edges of the land so
+  // the neighbours get foothills, not a wall.
+  let massif = smoothstep(0.15, 0.7, warp(clouds(scale: 1.6), amount: 0.08))
+  let hills  = clouds(scale: 3) * 0.3
+
+  field relief = 0.36 + hills + ~between(3.6, 4.4) * ridges * massif
+  render image(relief, range: [0, 5],
+               palette: ["#000000", "#2b2a2e", "#5a5250", "#9a8f84", "#ffffff"])
+
+  // Bare rock low, scree in the folds, snow on the heights.
+  let rock = clouds(scale: 8) * 0.35 + grain(0.1) + fold2 * 0.2
+  let snow = smoothstep(2.4, 3.2, relief)
+  render image(rock * (1 - snow) + snow * 1.6,
+               range: [0, 1.6],
+               palette: ["#3a3238", "#5e5a58", "#8a8580", "#d8dce4", "#ffffff"])
+
+  // Wind over stone; a far horn now and then; rock ticking as it cools.
+  pattern horns = repeat ~poisson(4) event(size: ~between(0.03, 0.06), intensity: ~between(0.3, 0.6),
+                                           y: ~between(0.2, 0.5))
+  pattern ticks = repeat ~poisson(24) event(size: ~between(0.001, 0.003), intensity: ~between(0.1, 0.5),
+                                            y: ~between(0.6, 1.0))
+  render sound(texture(massif, kind: "wind", gain: 0.7),
+               drone(0.8, voices: 2, instrument: "wind", scale: "pentatonic", key: "A1", gain: 0.3),
+               notes(horns, instrument: "bell", scale: "pentatonic", key: "A3", gain: 0.35),
+               notes(ticks, instrument: "wood", scale: "pentatonic", key: "A5", gain: 0.2),
+               duration: 20, room: 0.7)
+}

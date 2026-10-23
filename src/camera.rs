@@ -1,10 +1,23 @@
 //! The chase camera. Speed sensation lives mostly here: the camera lags
 //! behind on acceleration, pulls in and widens its field of view at high
 //! speed, rolls into turns and shakes on boost.
+//!
+//! On foot it becomes an **orbit camera**: it hangs over Judith's shoulder
+//! at the angle the mouse (or the arrow keys) set, drifts back behind her
+//! when left alone, and never sinks into the ground.
 
 use bevy::prelude::*;
 
 use crate::components::{CameraTarget, Velocity};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CameraMode {
+    /// Behind the target, along its heading.
+    #[default]
+    Chase,
+    /// Around the target, where the player looks.
+    Orbit,
+}
 
 #[derive(Component, Debug)]
 pub struct ChaseCamera {
@@ -16,6 +29,13 @@ pub struct ChaseCamera {
     pub roll: f32,
     /// Set by phases that want the camera to orbit slowly (taming camp).
     pub orbit: Option<f32>,
+    pub mode: CameraMode,
+    /// Orbit angles: yaw of the view direction (the game's convention:
+    /// forward = `R_y(yaw) · −Z`), pitch down (+) in radians.
+    pub orbit_yaw: f32,
+    pub orbit_pitch: f32,
+    /// Seconds since the player last turned the camera.
+    pub idle: f32,
 }
 
 impl Default for ChaseCamera {
@@ -27,6 +47,10 @@ impl Default for ChaseCamera {
             shake: 0.0,
             roll: 0.0,
             orbit: None,
+            mode: CameraMode::Chase,
+            orbit_yaw: 0.0,
+            orbit_pitch: 0.25,
+            idle: 10.0,
         }
     }
 }
@@ -35,10 +59,25 @@ impl ChaseCamera {
     pub fn kick(&mut self, amount: f32) {
         self.shake = (self.shake + amount).min(1.0);
     }
+
+    /// Turn the orbit camera by the player's look input (radians).
+    pub fn turn(&mut self, yaw: f32, pitch: f32) {
+        if yaw != 0.0 || pitch != 0.0 {
+            self.idle = 0.0;
+        }
+        self.orbit_yaw += yaw;
+        self.orbit_pitch = (self.orbit_pitch + pitch).clamp(-0.45, 1.15);
+    }
+
+    /// The horizontal direction the orbit camera looks along.
+    pub fn orbit_forward(&self) -> Vec3 {
+        Quat::from_rotation_y(self.orbit_yaw) * Vec3::NEG_Z
+    }
 }
 
 pub fn follow(
     time: Res<Time>,
+    terrain: Option<Res<crate::world::WorldTerrain>>,
     targets: Query<(&GlobalTransform, &CameraTarget, Option<&Velocity>)>,
     mut cams: Query<(&mut Transform, &mut Projection, &mut ChaseCamera)>,
 ) {
@@ -67,14 +106,51 @@ pub fn follow(
             p.fov = chase.base_fov;
         }
     }
+    chase.idle += dt;
 
     let target_pos = target_tf.translation();
+    let heading = {
+        let f = target_tf.forward().as_vec3();
+        Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::NEG_Z)
+    };
+
+    if chase.mode == CameraMode::Orbit {
+        // Left alone while she moves, the camera swings round behind her.
+        if chase.idle > 1.2 && speed > 0.5 {
+            let wanted = (-heading.x).atan2(-heading.z);
+            let d = wrap(wanted - chase.orbit_yaw);
+            chase.orbit_yaw += d * (1.0 - (-1.6 * dt).exp());
+        }
+        let dir = Quat::from_rotation_y(chase.orbit_yaw)
+            * Quat::from_rotation_x(-chase.orbit_pitch)
+            * Vec3::NEG_Z;
+        // Over the shoulder: the pivot sits a little to her right.
+        let right = Vec3::new(-dir.z, 0.0, dir.x).normalize_or(Vec3::X);
+        let pivot = target_pos + Vec3::Y * follow.height + right * 0.45;
+        let mut desired = pivot - dir * follow.distance;
+        // Never below the ground (or the water).
+        if let Some(t) = &terrain {
+            let floor = t.0.surface(desired.x, desired.z) + 0.5;
+            if desired.y < floor {
+                desired.y = floor;
+            }
+        }
+        let k = 1.0 - (-follow.stiffness * dt).exp();
+        cam_tf.translation = cam_tf.translation.lerp(desired, k);
+        chase.shake = (chase.shake - dt * 2.5).max(0.0);
+        cam_tf.look_at(pivot + Vec3::Y * 0.1, Vec3::Y);
+        if let Projection::Perspective(p) = &mut *proj {
+            let wanted = chase.base_fov + chase.fov_gain * 0.25 * (speed / 8.0).min(1.0);
+            p.fov += (wanted - p.fov) * (1.0 - (-6.0 * dt).exp());
+        }
+        return;
+    }
+
     let forward = if let Some(orbit) = chase.orbit {
         let a = time.elapsed_secs() * orbit;
         Vec3::new(a.sin(), 0.0, a.cos())
     } else {
-        let f = target_tf.forward().as_vec3();
-        Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::NEG_Z)
+        heading
     };
 
     // Desired camera position behind and above the target. At speed the
@@ -105,6 +181,16 @@ pub fn follow(
         let wanted = chase.base_fov + chase.fov_gain * speed_t.min(1.0);
         p.fov += (wanted - p.fov) * (1.0 - (-6.0 * dt).exp());
     }
+}
+
+fn wrap(mut a: f32) -> f32 {
+    while a > std::f32::consts::PI {
+        a -= std::f32::consts::TAU;
+    }
+    while a < -std::f32::consts::PI {
+        a += std::f32::consts::TAU;
+    }
+    a
 }
 
 pub struct CameraPlugin;

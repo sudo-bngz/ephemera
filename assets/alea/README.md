@@ -30,19 +30,25 @@ which, so similar lands cluster. Drop a new `.alea` file here and it joins the w
 | `bones.alea` | long pale dunes | rib arches to fly through |
 | `crystal.alea` | a terraced plateau | crystal shards |
 | `monoliths.alea` | a flooded basin with a rose window in its floor | monoliths, sigils |
+| `grove.alea` | rolling wooded hills with sunken glades | bulb trees, long grass, herds |
+| `peaks.alea` | a mountain range, snow on the heights (`range: [0, 5]`) | scree, spires, goats, kites |
 
 The game reads a land work as:
 
 1. **First `render image`: the relief.** The picture is the land. Black is the lake
    bottom (−18 m), 30 % grey the shoreline, white the peaks (+42 m). Give it
    `range: [0, 1]` to be literal; without it, alea's measured range is used, as for
-   the image.
+   the image. The range is also the picture's scale of heights: a work that renders
+   `range: [0, 5]` climbs five times as high (a value of 5 is +282 m) — that is how
+   `peaks.alea` makes mountains.
 2. **Second `render image` (optional): the ground painting**, its field and palette.
    Without it the relief's palette paints the ground.
 3. **`render sound`: the ambience**, looped, crossfaded with the neighbouring lands'
    as you fly.
 
 The region's canvas (0–1) spans 1024 m around its centre; neighbours overlap and blend.
+The game then cuts its own rivers through the relief and flattens the ground under
+the tribe's towns; a land work need not know about either.
 Keep the relief and painting fields cheap: they are sampled ~20 000 times per chunk.
 Noise, `clouds`, `stripes`, `warp`, `posterize`, `smoothstep` cost about a microsecond
 a point; a `merge` of twenty shapes costs twenty. (`cargo test chunk_cost -- --ignored

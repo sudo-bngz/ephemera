@@ -452,6 +452,37 @@ impl Pose {
         }
     }
 
+    /// In the air: knees up, arms out.
+    pub fn jump(rise: f32) -> Pose {
+        Pose {
+            spine_pitch: 0.12,
+            head_pitch: -0.1,
+            shoulder_flex: [-0.3 - 0.3 * rise; 2],
+            shoulder_abduct: [0.6 + 0.3 * rise; 2],
+            elbow: [0.5; 2],
+            hip_flex: [0.7 + 0.3 * rise, 0.35],
+            knee: [1.1, 0.6],
+            ..Default::default()
+        }
+    }
+
+    /// Swimming a crawl at the surface: body flat, legs trailing and
+    /// kicking, arms stroking in turn.
+    pub fn swim(phase: f32, moving: f32) -> Pose {
+        let s = phase.sin();
+        let c = phase.cos();
+        Pose {
+            spine_pitch: 1.3,
+            head_pitch: -1.0,
+            shoulder_flex: [1.6 + 1.2 * s * moving, 1.6 - 1.2 * s * moving],
+            shoulder_abduct: [0.35; 2],
+            elbow: [0.4 + 0.3 * c.abs(); 2],
+            hip_flex: [-1.15 + 0.25 * s * moving, -1.15 - 0.25 * s * moving],
+            knee: [0.35 + 0.3 * (-s).max(0.0), 0.35 + 0.3 * s.max(0.0)],
+            ..Default::default()
+        }
+    }
+
     /// Local rotation of every humanoid bone, relative to an arms-down
     /// rest, in character space.
     pub fn local_rotations(&self) -> [Quat; human::COUNT] {
@@ -707,6 +738,20 @@ pub struct Rig {
     pub driver: Entity,
 }
 
+/// What a figure on foot is doing, set by whoever moves it. Without one,
+/// a figure is standing or walking (crouching when the capture says so).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Stance {
+    #[default]
+    Stand,
+    Crouch,
+    /// Off the ground; the value is whether she is still rising.
+    Air {
+        rising: bool,
+    },
+    Swim,
+}
+
 /// A walking, crouching, riding figure: Judith and the tribe's riders.
 #[derive(Component, Debug, Default)]
 pub struct Gait {
@@ -936,7 +981,12 @@ fn drive_gaits(
     time: Res<Time>,
     axes: Res<InputAxes>,
     phase: Res<State<GamePhase>>,
-    mut figures: Query<(&GlobalTransform, &mut Gait, Option<&ChildOf>)>,
+    mut figures: Query<(
+        &GlobalTransform,
+        &mut Gait,
+        Option<&ChildOf>,
+        Option<&Stance>,
+    )>,
     mounts: Query<(&Flap, Option<&crate::racing::Rider>)>,
 ) {
     let dt = time.delta_secs();
@@ -944,7 +994,7 @@ fn drive_gaits(
         return;
     }
     let t = time.elapsed_secs();
-    for (tf, mut gait, parent) in &mut figures {
+    for (tf, mut gait, parent, stance) in &mut figures {
         let p = tf.translation();
         let mount = parent.and_then(|c| mounts.get(c.parent()).ok());
         let target = if let Some((flap, rider)) = mount {
@@ -960,15 +1010,22 @@ fn drive_gaits(
             gait.speed += (v - gait.speed) * (1.0 - (-8.0 * dt).exp());
             // A stride is about 1.4 m: the phase turns once every two.
             gait.phase += gait.speed * dt * std::f32::consts::TAU / 2.8;
-            let crouching = *phase.get() == GamePhase::Capture && axes.crouch;
-            if crouching {
-                Pose::crouch(gait.phase, (gait.speed / 3.0).min(1.0))
-            } else {
-                let walk = (gait.speed / 4.5).min(1.6);
-                Pose::idle(t).lerp(
-                    &Pose::walk(gait.phase, walk.max(0.2)),
-                    (walk * 2.5).min(1.0),
-                )
+            let stance = match stance {
+                Some(s) => *s,
+                None if *phase.get() == GamePhase::Capture && axes.crouch => Stance::Crouch,
+                None => Stance::Stand,
+            };
+            match stance {
+                Stance::Crouch => Pose::crouch(gait.phase, (gait.speed / 3.0).min(1.0)),
+                Stance::Air { rising } => Pose::jump(if rising { 1.0 } else { 0.0 }),
+                Stance::Swim => Pose::swim(gait.phase * 0.6, (gait.speed / 2.0).min(1.0)),
+                Stance::Stand => {
+                    let walk = (gait.speed / 4.5).min(1.6);
+                    Pose::idle(t).lerp(
+                        &Pose::walk(gait.phase, walk.max(0.2)),
+                        (walk * 2.5).min(1.0),
+                    )
+                }
             }
         };
         gait.last = Some(p);

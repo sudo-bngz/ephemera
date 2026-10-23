@@ -1,0 +1,27 @@
+// Grove — rolling wooded hills: bulb trees, long grass, grazing herds.
+
+work Grove {
+  let hills  = warp(clouds(scale: 2.5), amount: 0.05) * 0.8 + clouds(scale: 7) * 0.2
+  // A few clearings sunk into meadows; one of them usually floods.
+  let glades = smoothstep(0.62, 0.72, clouds(scale: ~between(4, 6), detail: 3))
+
+  field relief = 0.36 + 0.26 * hills - 0.1 * glades
+  render image(relief, range: [0, 1],
+               palette: ["#000000", "#1e2418", "#3a4a2a", "#7a9a4a", "#e8f0c0"])
+
+  // Moss and leaf litter under the trees, pale grass in the glades.
+  let litter = clouds(scale: 9) * 0.5 + grain(0.1) + dots(count: 60, size: 0.3, softness: 0.5) * 0.15
+  render image(litter + glades * 0.5,
+               palette: ["#1a2414", "#2e4a22", "#4a6e2c", "#8aa04a", "#d8d890"])
+
+  // Leaves in the wind, a far herd, birds.
+  pattern birds = repeat ~poisson(30) event(size: ~between(0.002, 0.005), intensity: ~between(0.2, 0.6),
+                                            y: ~between(0.75, 1.0))
+  pattern lowing = repeat ~poisson(5) event(size: ~between(0.02, 0.05), intensity: ~between(0.2, 0.5),
+                                            y: ~between(0.1, 0.3))
+  render sound(texture(hills, kind: "wind", gain: 0.45),
+               drone(0.75, voices: 3, instrument: "strings", scale: "major", key: "G2", gain: 0.3),
+               notes(birds, instrument: "glass", scale: "major", key: "G6", gain: 0.3),
+               notes(lowing, instrument: "marimba", scale: "major", key: "G2", gain: 0.3),
+               duration: 20, room: 0.45)
+}

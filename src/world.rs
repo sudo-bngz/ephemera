@@ -7,7 +7,8 @@
 //! per-chunk RNG — so the world is endless, seamless and reproducible.
 //!
 //! Landmarks (monoliths, orbs, veils, sigils) wear editions of alea works,
-//! painted at runtime by `art.rs`.
+//! painted at runtime by `art.rs`. Settlements (`settlement.rs`) and animals
+//! (`fauna.rs`) are spawned from here too, chunk by chunk.
 
 use std::collections::{HashMap, HashSet};
 
@@ -173,6 +174,14 @@ struct Breathe {
     amount: f32,
 }
 
+/// Trees lean in the wind, pivoting at the root.
+#[derive(Component)]
+pub struct Sway {
+    pub phase: f32,
+    pub amount: f32,
+    pub yaw: f32,
+}
+
 /// A swarm of glowing moths circling a point.
 #[derive(Component)]
 struct Moth {
@@ -210,6 +219,14 @@ pub struct WetlandAssets {
     sigil_mesh: Handle<Mesh>,
     moth_mesh: Handle<Mesh>,
     moth_mat: Handle<StandardMaterial>,
+    pub trunk_mesh: Handle<Mesh>,
+    pub canopy_mesh: Handle<Mesh>,
+    pub trunk_mat: Handle<StandardMaterial>,
+    pub leaf_mats: Vec<Handle<StandardMaterial>>,
+    pub rock_mesh: Handle<Mesh>,
+    pub rock_mat: Handle<StandardMaterial>,
+    pub spire_mesh: Handle<Mesh>,
+    pub grass_mat: Handle<StandardMaterial>,
 }
 
 /// A clump of reeds as one mesh (unit radius, unit height), so a clump is a
@@ -377,6 +394,44 @@ fn setup_assets(
             unlit: true,
             ..default()
         }),
+        // Unit trunk (height 1, radius 1 at the foot) and unit canopy.
+        trunk_mesh: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(7)),
+        canopy_mesh: meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap()),
+        trunk_mat: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.30, 0.22, 0.18),
+            perceptual_roughness: 0.95,
+            ..default()
+        }),
+        leaf_mats: vec![
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.22, 0.48, 0.26),
+                perceptual_roughness: 0.9,
+                ..default()
+            }),
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.46, 0.52, 0.18),
+                perceptual_roughness: 0.9,
+                ..default()
+            }),
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.58, 0.30, 0.42),
+                emissive: LinearRgba::rgb(0.25, 0.05, 0.15),
+                perceptual_roughness: 0.9,
+                ..default()
+            }),
+        ],
+        rock_mesh: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
+        rock_mat: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.40, 0.38, 0.40),
+            perceptual_roughness: 0.98,
+            ..default()
+        }),
+        spire_mesh: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(5)),
+        grass_mat: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.52, 0.60, 0.26),
+            perceptual_roughness: 0.95,
+            ..default()
+        }),
     });
 }
 
@@ -463,8 +518,13 @@ pub struct ChunkData {
 }
 
 impl ChunkData {
+    /// The lowest point sampled inside the chunk.
+    pub(crate) fn min_height(&self) -> f32 {
+        self.min_h
+    }
+
     /// Height at a chunk-local position, from the sampled grid.
-    fn height_at(&self, lx: f32, lz: f32) -> f32 {
+    pub(crate) fn height_at(&self, lx: f32, lz: f32) -> f32 {
         let m = GRID + 3;
         let step = CHUNK / GRID as f32;
         let (fx, fz) = (
@@ -583,6 +643,8 @@ fn spawn_chunk(
     images: &mut Assets<Image>,
     art: &mut Art,
     a: &WetlandAssets,
+    sa: &crate::settlement::SettlementAssets,
+    fa: &crate::fauna::FaunaAssets,
     t: &Terrain,
     wg: &WorldGen,
     data: ChunkData,
@@ -638,10 +700,13 @@ fn spawn_chunk(
         let w = origin + l;
         (l, w, data.height_at(l.x, l.y))
     };
+    let sites = t.sites_near(origin + CHUNK * 0.5, CHUNK);
     let flat_ok = |w: Vec2| {
         !t.flatten
             .iter()
             .any(|f| f.centre.distance(w) < f.radius * 1.4)
+            && !sites.iter().any(|s| s.centre.distance(w) < s.radius * 1.3)
+            && t.river(w.x, w.y).0 < 0.5
     };
     let solid_ok = |w: Vec2| !wg.keeps_clear(w) && flat_ok(w);
     let local = |l: Vec2, y: f32| Vec3::new(l.x, y, l.y);
@@ -653,6 +718,8 @@ fn spawn_chunk(
         Props::Monoliths => 6,
         Props::Bones => 2,
         Props::Crystal => 0,
+        Props::Peaks => 0,
+        Props::Grove => 3,
         Props::None => 4,
     };
     for _ in 0..reed_count {
@@ -676,6 +743,26 @@ fn spawn_chunk(
             radius,
             height,
             tall,
+            variant,
+        ));
+    }
+    // Reeds and grass line the rivers' banks, whatever the land.
+    for _ in 0..10 {
+        let (l, w, h) = spot(&mut rng);
+        let (carve, _) = t.river(w.x, w.y);
+        if !(0.08..0.55).contains(&carve) || h < SEA_LEVEL - 1.0 || !flat_ok(w) {
+            continue;
+        }
+        let variant = rng.gen_range(0..a.reed_meshes.len());
+        let (radius, height) = (rng.gen_range(1.4..3.0), rng.gen_range(1.8..3.4));
+        kids.push(reed_entity(
+            commands,
+            a,
+            &mut rng,
+            local(l, h.max(SEA_LEVEL - 0.3)),
+            radius,
+            height,
+            false,
             variant,
         ));
     }
@@ -914,8 +1001,78 @@ fn spawn_chunk(
                 ));
             }
         }
+        Props::Grove => {
+            // Bulb trees in loose stands, long grass between them, the odd
+            // boulder.
+            for _ in 0..11 {
+                let (l, w, h) = spot(&mut rng);
+                if h < SEA_LEVEL + 0.3 || !solid_ok(w) {
+                    continue;
+                }
+                let height = rng.gen_range(7.0..16.0);
+                kids.push(tree(commands, a, &mut rng, local(l, h), height));
+            }
+            for _ in 0..14 {
+                let (l, w, h) = spot(&mut rng);
+                if h < SEA_LEVEL || !flat_ok(w) {
+                    continue;
+                }
+                kids.push(grass(commands, a, &mut rng, local(l, h)));
+            }
+            for _ in 0..rng.gen_range(0..3) {
+                let (l, w, h) = spot(&mut rng);
+                if solid_ok(w) {
+                    let size = rng.gen_range(1.2..3.0);
+                    kids.push(boulder(commands, a, &mut rng, local(l, h), size));
+                }
+            }
+        }
+        Props::Peaks => {
+            // Scree and spires; stunted trees on the lower slopes.
+            for _ in 0..7 {
+                let (l, w, h) = spot(&mut rng);
+                if solid_ok(w) {
+                    let size = rng.gen_range(1.5..5.0);
+                    kids.push(boulder(commands, a, &mut rng, local(l, h), size));
+                }
+            }
+            for _ in 0..rng.gen_range(1..4) {
+                let (l, w, h) = spot(&mut rng);
+                if solid_ok(w) && h > SEA_LEVEL + 5.0 {
+                    let height = rng.gen_range(9.0..26.0);
+                    kids.push(spire(commands, a, &mut rng, local(l, h), height));
+                }
+            }
+            for _ in 0..3 {
+                let (l, w, h) = spot(&mut rng);
+                if h > SEA_LEVEL + 0.3 && h < 70.0 && solid_ok(w) {
+                    let height = rng.gen_range(4.0..8.0);
+                    kids.push(tree(commands, a, &mut rng, local(l, h), height));
+                }
+            }
+        }
         Props::Marsh | Props::None => {}
     }
+
+    // --- the tribe and the beasts -------------------------------------------
+    for site in sites
+        .iter()
+        .filter(|s| ((s.centre / CHUNK).floor().as_ivec2()) == coord)
+    {
+        crate::settlement::spawn(
+            commands, meshes, materials, a, sa, t, site, origin, &mut kids,
+        );
+    }
+    crate::fauna::spawn_in_chunk(
+        commands,
+        fa,
+        t,
+        &data,
+        coord,
+        centre_biome,
+        &mut rng,
+        &mut kids,
+    );
 
     // --- landmarks anywhere (rarer outside the monolith field) ---------------
     let roll = |rng: &mut StdRng, p: f64| rng.gen_bool(p);
@@ -982,6 +1139,155 @@ fn spawn_chunk(
 
     commands.entity(root).add_children(&kids);
     root
+}
+
+/// A bulb tree: a tapering trunk and a cluster of round canopies, leaning
+/// in the wind from the root.
+fn tree(
+    commands: &mut Commands,
+    a: &WetlandAssets,
+    rng: &mut StdRng,
+    at: Vec3,
+    height: f32,
+) -> Entity {
+    let leaf = a.leaf_mats[rng.gen_range(0..a.leaf_mats.len())].clone();
+    let trunk_r = height * rng.gen_range(0.035..0.055);
+    let yaw = rng.gen_range(0.0..std::f32::consts::TAU);
+
+    commands
+        .spawn((
+            Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
+            Visibility::default(),
+            Sway {
+                phase: rng.gen_range(0.0..std::f32::consts::TAU),
+                amount: 0.025,
+                yaw,
+            },
+            Obstacle {
+                radius: trunk_r + 0.6,
+                below: 0.0,
+                above: height * 0.75,
+            },
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Mesh3d(a.trunk_mesh.clone()),
+                MeshMaterial3d(a.trunk_mat.clone()),
+                Transform::from_xyz(0.0, height * 0.45, 0.0).with_scale(Vec3::new(
+                    trunk_r,
+                    height * 0.9,
+                    trunk_r,
+                )),
+            ));
+            let n = rng.gen_range(3..6);
+            for k in 0..n {
+                let r = height * rng.gen_range(0.16..0.28);
+                let a0 = k as f32 / n as f32 * std::f32::consts::TAU + rng.gen_range(-0.4..0.4);
+                let off = Vec3::new(a0.cos(), 0.0, a0.sin()) * r * rng.gen_range(0.3..0.9)
+                    + Vec3::Y * (height * rng.gen_range(0.72..1.0));
+                p.spawn((
+                    Mesh3d(a.canopy_mesh.clone()),
+                    MeshMaterial3d(leaf.clone()),
+                    Transform::from_translation(off).with_scale(Vec3::new(
+                        r,
+                        r * rng.gen_range(0.7..1.0),
+                        r,
+                    )),
+                    Breathe {
+                        base: Vec3::new(r, r * 0.85, r),
+                        phase: rng.gen_range(0.0..std::f32::consts::TAU),
+                        amount: 0.02,
+                    },
+                ));
+            }
+        })
+        .id()
+}
+
+fn boulder(
+    commands: &mut Commands,
+    a: &WetlandAssets,
+    rng: &mut StdRng,
+    at: Vec3,
+    size: f32,
+) -> Entity {
+    let scale = Vec3::new(
+        size * rng.gen_range(0.8..1.3),
+        size * rng.gen_range(0.55..0.9),
+        size * rng.gen_range(0.8..1.3),
+    );
+    commands
+        .spawn((
+            Mesh3d(a.rock_mesh.clone()),
+            MeshMaterial3d(a.rock_mat.clone()),
+            Transform::from_translation(at + Vec3::Y * scale.y * 0.55)
+                .with_rotation(Quat::from_euler(
+                    EulerRot::YXZ,
+                    rng.gen_range(0.0..std::f32::consts::TAU),
+                    rng.gen_range(-0.3..0.3),
+                    rng.gen_range(-0.3..0.3),
+                ))
+                .with_scale(scale),
+            Obstacle {
+                radius: scale.x.max(scale.z) * 0.9,
+                below: scale.y,
+                above: scale.y,
+            },
+        ))
+        .id()
+}
+
+/// A rock spire: a needle of stone leaning a little.
+fn spire(
+    commands: &mut Commands,
+    a: &WetlandAssets,
+    rng: &mut StdRng,
+    at: Vec3,
+    height: f32,
+) -> Entity {
+    let r = height * rng.gen_range(0.1..0.16);
+    let tilt = Quat::from_rotation_x(rng.gen_range(-0.12..0.12))
+        * Quat::from_rotation_z(rng.gen_range(-0.12..0.12));
+    commands
+        .spawn((
+            Mesh3d(a.spire_mesh.clone()),
+            MeshMaterial3d(a.rock_mat.clone()),
+            Transform::from_translation(at + tilt * Vec3::Y * height * 0.5)
+                .with_rotation(tilt * Quat::from_rotation_y(rng.gen_range(0.0..6.0)))
+                .with_scale(Vec3::new(r, height, r)),
+            Obstacle {
+                radius: r + 0.5,
+                below: height * 0.5,
+                above: height * 0.45,
+            },
+        ))
+        .id()
+}
+
+/// A tuft of long grass: a short, wide reed clump in grass green.
+fn grass(commands: &mut Commands, a: &WetlandAssets, rng: &mut StdRng, at: Vec3) -> Entity {
+    let yaw = rng.gen_range(0.0..std::f32::consts::TAU);
+    let variant = rng.gen_range(0..a.reed_meshes.len());
+    let (radius, height) = (rng.gen_range(1.2..2.6), rng.gen_range(0.8..1.5));
+    commands
+        .spawn((
+            ReedClump {
+                radius,
+                height,
+                solid: false,
+                tilt: Vec2::ZERO,
+                tilt_vel: Vec2::ZERO,
+                phase: rng.gen_range(0.0..std::f32::consts::TAU),
+                yaw,
+            },
+            Mesh3d(a.reed_meshes[variant].clone()),
+            MeshMaterial3d(a.grass_mat.clone()),
+            Transform::from_translation(at)
+                .with_rotation(Quat::from_rotation_y(yaw))
+                .with_scale(Vec3::new(radius, height, radius)),
+            NotShadowCaster,
+        ))
+        .id()
 }
 
 fn reed_entity(
@@ -1186,6 +1492,8 @@ fn stream_chunks(
     wg: Option<ResMut<WorldGen>>,
     terrain: Option<Res<WorldTerrain>>,
     assets: Res<WetlandAssets>,
+    tribe: Res<crate::settlement::SettlementAssets>,
+    beasts: Res<crate::fauna::FaunaAssets>,
     mut art: ResMut<Art>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1248,6 +1556,8 @@ fn stream_chunks(
             &mut images,
             &mut art,
             &assets,
+            &tribe,
+            &beasts,
             &terrain.0,
             &wg,
             data,
@@ -1381,6 +1691,21 @@ fn animate_water(time: Res<Time>, a: Res<WetlandAssets>, mut meshes: ResMut<Asse
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 }
 
+/// Trees lean with the gusts, the same wind the reeds feel.
+fn sway_trees(time: Res<Time>, mut q: Query<(&Sway, &mut Transform, &GlobalTransform)>) {
+    let t = time.elapsed_secs();
+    let wind_dir = Vec2::new(0.8, 0.6);
+    for (s, mut tf, gt) in &mut q {
+        let w = gt.translation().xz();
+        let gust = ((w.dot(wind_dir) / 38.0 - t * 1.1).sin() * 0.5 + 0.5).powi(4);
+        let lean = wind_dir * (s.amount * (0.4 + 1.6 * gust))
+            + Vec2::new((t * 0.8 + s.phase).sin(), (t * 0.6 + s.phase).cos()) * s.amount * 0.5;
+        tf.rotation = Quat::from_rotation_z(-lean.x)
+            * Quat::from_rotation_x(lean.y)
+            * Quat::from_rotation_y(s.yaw);
+    }
+}
+
 fn float_landmarks(time: Res<Time>, mut q: Query<(&Floater, &mut Transform)>) {
     let t = time.elapsed_secs();
     let dt = time.delta_secs();
@@ -1438,6 +1763,7 @@ impl Plugin for WorldPlugin {
             (
                 drift_spores,
                 sway_reeds,
+                sway_trees,
                 float_landmarks,
                 fly_moths,
                 breathe,

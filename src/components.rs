@@ -86,6 +86,21 @@ pub fn spawn_rider(
     e
 }
 
+/// Someone of the tribe at home in a settlement, dressed in `cloth`.
+pub fn spawn_villager(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    cloth: Color,
+) -> Entity {
+    let e = spawn_figure(commands, meshes, materials, Vec3::ZERO, cloth, false);
+    commands
+        .entity(e)
+        .remove::<PhaseScoped>()
+        .insert(Name::new("Villager"));
+    e
+}
+
 fn spawn_figure(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,

@@ -22,11 +22,14 @@ mod capture;
 mod components;
 mod creature;
 mod explore;
+mod fauna;
 mod hud;
 mod input;
 mod models;
+mod onfoot;
 mod racing;
 mod rig;
+mod settlement;
 mod sky;
 mod state;
 mod taming;
@@ -72,6 +75,8 @@ impl Plugin for GamePlugin {
             input::InputPlugin,
             models::ModelsPlugin,
             world::WorldPlugin,
+            settlement::SettlementPlugin,
+            fauna::FaunaPlugin,
             sky::SkyPlugin,
             art::ArtPlugin,
             audio::SoundPlugin,
@@ -87,6 +92,7 @@ impl Plugin for GamePlugin {
             taming::TamingPlugin,
             racing::RacingPlugin,
             explore::ExplorePlugin,
+            onfoot::OnFootPlugin,
         ));
     }
 }
@@ -569,6 +575,293 @@ mod smoke {
             riders.iter().all(|d| *d > 0.15),
             "riders not seated: {riders:?}"
         );
+    }
+
+    /// F lands the Ephemera and puts Judith on her feet; she walks, jumps,
+    /// turns the camera, whistles the creature over and climbs back on.
+    #[test]
+    fn judith_walks_the_world() {
+        use crate::onfoot::Walker;
+        use crate::racing::Parked;
+        let mut app = app();
+        explore(&mut app, 11);
+        settle(&mut app, 30_000);
+        let eph = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::racing::Player>>()
+            .single(app.world())
+            .unwrap();
+        let judith = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::components::Judith>>()
+            .single(app.world())
+            .unwrap();
+        assert!(
+            app.world().get::<ChildOf>(judith).is_some(),
+            "starts mounted"
+        );
+
+        // Land and dismount.
+        press(&mut app, KeyCode::KeyF);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::KeyF);
+        for _ in 0..400 {
+            app.update();
+            if app.world().get::<Walker>(judith).is_some() {
+                break;
+            }
+        }
+        assert!(
+            app.world().get::<Walker>(judith).is_some(),
+            "never dismounted"
+        );
+        assert!(app.world().get::<ChildOf>(judith).is_none());
+        assert!(
+            app.world().get::<Parked>(eph).is_some(),
+            "Ephemera not parked"
+        );
+        assert!(
+            app.world()
+                .get::<crate::components::CameraTarget>(judith)
+                .is_some()
+                && app
+                    .world()
+                    .get::<crate::components::CameraTarget>(eph)
+                    .is_none(),
+            "the camera should follow Judith"
+        );
+        let cam = app
+            .world_mut()
+            .query::<&crate::camera::ChaseCamera>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(cam.mode, crate::camera::CameraMode::Orbit);
+
+        // Walk forward (relative to the camera) for 3 s: she moves, stays on
+        // the ground and faces the way she goes.
+        let start = app.world().get::<Transform>(judith).unwrap().translation;
+        press(&mut app, KeyCode::KeyW);
+        tick(&mut app, 180);
+        let tf = *app.world().get::<Transform>(judith).unwrap();
+        let moved = (tf.translation - start).xz().length();
+        assert!(moved > 8.0, "walked only {moved} m in 3 s");
+        let terrain = app
+            .world()
+            .resource::<crate::world::WorldTerrain>()
+            .0
+            .clone();
+        let ground = terrain.height(tf.translation.x, tf.translation.z);
+        assert!(
+            (tf.translation.y - ground.max(crate::terrain::SEA_LEVEL - 1.1)).abs() < 0.3
+                || tf.translation.y < crate::terrain::SEA_LEVEL,
+            "floating: y {} ground {ground}",
+            tf.translation.y
+        );
+        // Running is faster.
+        let before = tf.translation;
+        press(&mut app, KeyCode::ShiftLeft);
+        tick(&mut app, 120);
+        let ran = (app.world().get::<Transform>(judith).unwrap().translation - before)
+            .xz()
+            .length();
+        release(&mut app, KeyCode::ShiftLeft);
+        assert!(ran > moved * 0.9, "sprint {ran} m vs walk {moved} m");
+        release(&mut app, KeyCode::KeyW);
+
+        // The arrows turn the camera.
+        let yaw0 = app
+            .world_mut()
+            .query::<&crate::camera::ChaseCamera>()
+            .single(app.world())
+            .unwrap()
+            .orbit_yaw;
+        press(&mut app, KeyCode::ArrowLeft);
+        tick(&mut app, 30);
+        release(&mut app, KeyCode::ArrowLeft);
+        let yaw1 = app
+            .world_mut()
+            .query::<&crate::camera::ChaseCamera>()
+            .single(app.world())
+            .unwrap()
+            .orbit_yaw;
+        assert!((yaw1 - yaw0).abs() > 0.3, "camera didn't turn");
+
+        // A jump leaves the ground and comes back.
+        let on_ground = app.world().get::<Transform>(judith).unwrap().translation.y;
+        press(&mut app, KeyCode::Space);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::Space);
+        let mut peak = on_ground;
+        for _ in 0..90 {
+            app.update();
+            peak = peak.max(app.world().get::<Transform>(judith).unwrap().translation.y);
+        }
+        assert!(
+            peak > on_ground + 1.0,
+            "jump peaked at +{}",
+            peak - on_ground
+        );
+        assert!(app.world().get::<Walker>(judith).unwrap().grounded);
+
+        // Far from the creature: F whistles it over; it arrives and parks.
+        let d0 = {
+            let e = app.world().get::<Transform>(eph).unwrap().translation;
+            let j = app.world().get::<Transform>(judith).unwrap().translation;
+            (e - j).xz().length()
+        };
+        if d0 < 6.5 {
+            // Walk away first.
+            press(&mut app, KeyCode::KeyS);
+            tick(&mut app, 200);
+            release(&mut app, KeyCode::KeyS);
+        }
+        press(&mut app, KeyCode::KeyF);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::KeyF);
+        assert!(
+            app.world().get::<Parked>(eph).unwrap().summon.is_some(),
+            "no whistle"
+        );
+        for _ in 0..600 {
+            app.update();
+            if app.world().get::<Parked>(eph).unwrap().summon.is_none() {
+                break;
+            }
+        }
+        let d1 = {
+            let e = app.world().get::<Transform>(eph).unwrap().translation;
+            let j = app.world().get::<Transform>(judith).unwrap().translation;
+            (e - j).xz().length()
+        };
+        assert!(d1 < 6.5, "the Ephemera stayed {d1} m away");
+
+        // Back in the saddle.
+        press(&mut app, KeyCode::KeyF);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::KeyF);
+        assert!(
+            app.world().get::<ChildOf>(judith).is_some(),
+            "didn't remount"
+        );
+        assert!(app.world().get::<Walker>(judith).is_none());
+        assert!(app.world().get::<Parked>(eph).is_none());
+        assert!(
+            app.world()
+                .get::<crate::components::CameraTarget>(eph)
+                .is_some()
+        );
+        // And she can fly away again.
+        let p0 = app.world().get::<Transform>(eph).unwrap().translation;
+        press(&mut app, KeyCode::KeyW);
+        tick(&mut app, 120);
+        let p1 = app.world().get::<Transform>(eph).unwrap().translation;
+        assert!((p1 - p0).xz().length() > 20.0, "can't fly after remounting");
+    }
+
+    /// The world has people and animals in it: within a few kilometres of
+    /// the start there are settlements with villagers who walk about, and
+    /// beasts that move.
+    #[test]
+    fn the_world_is_inhabited() {
+        use crate::fauna::{Beast, Critter};
+        use crate::settlement::Villager;
+        let mut app = app();
+        explore(&mut app, 5);
+        settle(&mut app, 30_000);
+        let terrain = app
+            .world()
+            .resource::<crate::world::WorldTerrain>()
+            .0
+            .clone();
+        // Fly to the nearest settlement.
+        let site = terrain
+            .sites_near(Vec2::ZERO, 3000.0)
+            .into_iter()
+            .min_by(|a, b| a.centre.length().total_cmp(&b.centre.length()))
+            .expect("a settlement within 3 km");
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::racing::Player>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .unwrap()
+            .translation = Vec3::new(site.centre.x, site.height + 30.0, site.centre.y);
+        settle(&mut app, 30_000);
+        tick(&mut app, 5);
+        let villagers: Vec<Vec3> = app
+            .world_mut()
+            .query::<(&GlobalTransform, &Villager)>()
+            .iter(app.world())
+            .map(|(t, _)| t.translation())
+            .collect();
+        let at_home = villagers
+            .iter()
+            .filter(|p| p.xz().distance(site.centre) < site.radius * 1.5)
+            .count();
+        assert!(
+            at_home > 0,
+            "a {:?} with nobody in it ({} elsewhere)",
+            site.kind,
+            villagers.len()
+        );
+        // Houses are solid.
+        let houses = app
+            .world_mut()
+            .query::<(&GlobalTransform, &crate::world::Obstacle)>()
+            .iter(app.world())
+            .filter(|(t, _)| t.translation().xz().distance(site.centre) < site.radius * 1.2)
+            .count();
+        assert!(houses >= 3, "only {houses} solid things in the settlement");
+        // People move about.
+        tick(&mut app, 240);
+        let later: Vec<Vec3> = app
+            .world_mut()
+            .query::<(&GlobalTransform, &Villager)>()
+            .iter(app.world())
+            .map(|(t, _)| t.translation())
+            .collect();
+        assert!(
+            villagers
+                .iter()
+                .zip(&later)
+                .any(|(a, b)| a.distance(*b) > 0.5),
+            "nobody moved"
+        );
+
+        // Animals: something of every kind somewhere in the loaded world, or
+        // at least two kinds, and they move.
+        let beasts: Vec<(Beast, Vec3)> = app
+            .world_mut()
+            .query::<(&Critter, &GlobalTransform)>()
+            .iter(app.world())
+            .map(|(c, t)| (c.kind, t.translation()))
+            .collect();
+        let kinds: std::collections::HashSet<_> = beasts.iter().map(|b| b.0).collect();
+        assert!(kinds.len() >= 2, "beasts around the settlement: {kinds:?}");
+        tick(&mut app, 120);
+        let after: Vec<Vec3> = app
+            .world_mut()
+            .query::<(&Critter, &GlobalTransform)>()
+            .iter(app.world())
+            .map(|(_, t)| t.translation())
+            .collect();
+        assert!(
+            beasts
+                .iter()
+                .zip(&after)
+                .any(|(a, b)| a.1.distance(*b) > 0.5),
+            "no beast moved"
+        );
+        // Limbs swing: at least one leg's rotation differs from its rest.
+        let swung = app
+            .world_mut()
+            .query::<(&crate::fauna::Limb, &Transform)>()
+            .iter(app.world())
+            .filter(|(l, t)| t.rotation.angle_between(l.rest.rotation) > 0.05)
+            .count();
+        assert!(swung > 0, "no limb moved");
     }
 
     /// N draws a new world in place.

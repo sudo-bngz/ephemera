@@ -12,12 +12,16 @@ use rand::rngs::StdRng;
 
 use crate::art::{Art, EditionId, Landmark};
 use crate::camera::ChaseCamera;
-use crate::components::Velocity;
+use crate::components::{Judith, Velocity};
 use crate::hud::Hud;
-use crate::racing::{Player, Race, Rider, spawn_player_rider, spawn_speed_lines};
+use crate::onfoot::Walker;
+use crate::racing::{Parked, Player, Race, Rider, spawn_player_rider, spawn_speed_lines};
 use crate::state::{EphemeraStats, GamePhase};
 use crate::terrain::{Flatten, RegionId};
 use crate::world::{Mood, WorldSetup, WorldTerrain, spawn_world};
+
+const FLIGHT_KEYS: &str = "W/S throttle · A/D bank · Q dive / E climb · SHIFT boost · F land & dismount · N new world · ESC title";
+const FOOT_KEYS: &str = "WASD walk · mouse / arrows look · SHIFT run · SPACE jump · C crouch · F mount (close) / whistle · N new world";
 
 /// A world to replay instead of a new one (`--seed`), consumed on entry.
 #[derive(Resource, Default)]
@@ -102,9 +106,7 @@ fn setup(
              the relief, the ground, the monoliths, the orbs, and what you hear."
         ),
         banner: String::new(),
-        footer:
-            "W/S throttle · A/D bank · Q dive / E climb · SHIFT boost · N new world · ESC title"
-                .into(),
+        footer: FLIGHT_KEYS.into(),
         side: String::new(),
     };
 }
@@ -132,12 +134,18 @@ fn hud(
     art: Res<Art>,
     sounds: Res<crate::audio::Sounds>,
     wg: Res<crate::world::WorldGen>,
-    player: Query<(&Transform, &Velocity, &Rider), With<Player>>,
+    player: Query<(&Transform, &Velocity, &Rider, Has<Parked>), With<Player>>,
+    walker: Query<(&Transform, &Velocity, &Walker), With<Judith>>,
     landmarks: Query<(&GlobalTransform, &Landmark)>,
     mut hud: ResMut<Hud>,
 ) {
-    let Ok((tf, vel, rider)) = player.single() else {
+    let Ok((etf, evel, rider, parked)) = player.single() else {
         return;
+    };
+    let on_foot = walker.single().ok();
+    let (tf, vel) = match on_foot {
+        Some((t, v, _)) => (t, v),
+        None => (etf, evel),
     };
     let p = tf.translation;
     if let Some(last) = ex.last {
@@ -185,17 +193,49 @@ fn hud(
     if wg.pending() > 0 {
         painting += &format!("\nbuilding {} chunk(s)…", wg.pending());
     }
+    let status = match on_foot {
+        Some((_, _, w)) => {
+            let doing = if w.swimming {
+                "swimming"
+            } else if !w.grounded {
+                "in the air"
+            } else {
+                "on foot"
+            };
+            let d = (etf.translation - p).xz().length();
+            format!(
+                "{doing}\n{:>4.1} km/h\nEphemera {:.0} m {}",
+                vel.0.length() * 3.6,
+                d,
+                if d < 6.5 {
+                    "— F to mount"
+                } else if parked {
+                    "— F to whistle"
+                } else {
+                    ""
+                }
+            )
+        }
+        None => format!(
+            "{:>4.0} km/h\nalt {:>3.0} m\nboost {}",
+            vel.0.length() * 3.6,
+            (p.y - ground).max(0.0),
+            "█".repeat((rider.boost_fraction() * 10.0).round() as usize),
+        ),
+    };
     hud.side = format!(
-        "{:>4.0} km/h\nalt {:>3.0} m\nboost {}\n\n{}\n{:.1} km travelled\n{} land(s), {} landmark edition(s) found{}",
-        vel.0.length() * 3.6,
-        (p.y - ground).max(0.0),
-        "█".repeat((rider.boost_fraction() * 10.0).round() as usize),
+        "{status}\n\n{}\n{:.1} km travelled\n{} land(s), {} landmark edition(s) found{}",
         land,
         ex.travelled / 1000.0,
         ex.lands_seen.len(),
         ex.seen.len(),
         painting,
     );
+    hud.footer = if on_foot.is_some() {
+        FOOT_KEYS.into()
+    } else {
+        FLIGHT_KEYS.into()
+    };
     hud.banner = if ex.region_banner > 0.0 {
         format!("— {land} —")
     } else if let Some((_, id)) = near {

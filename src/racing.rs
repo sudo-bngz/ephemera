@@ -133,7 +133,7 @@ pub struct Rider {
 }
 
 #[derive(Component, Default, Debug, Clone, Copy)]
-struct FlightInput {
+pub(crate) struct FlightInput {
     steer: f32,
     throttle: f32,
     pitch: f32,
@@ -155,6 +155,17 @@ pub struct Racer {
 
 #[derive(Component)]
 pub(crate) struct Player;
+
+/// The player's Ephemera waiting for its rider: it settles to the ground
+/// and idles, or flies to a `summon` point when whistled for.
+#[derive(Component, Debug, Default)]
+pub(crate) struct Parked {
+    pub summon: Option<Vec3>,
+}
+
+/// Coming in to land: the flight model brakes and descends on its own.
+#[derive(Component, Debug)]
+pub(crate) struct AutoLand;
 
 #[derive(Component)]
 struct Ai {
@@ -561,10 +572,18 @@ fn clock(time: Res<Time>, mut race: ResMut<Race>) {
 fn player_input(
     axes: Res<InputAxes>,
     race: Res<Race>,
-    mut q: Query<&mut FlightInput, With<Player>>,
+    mut q: Query<(&mut FlightInput, Has<AutoLand>, Has<Parked>), With<Player>>,
 ) {
-    for mut fi in &mut q {
-        *fi = if race.started {
+    for (mut fi, landing, parked) in &mut q {
+        *fi = if landing {
+            // Brake and sink; the controls are hers again once she's down.
+            FlightInput {
+                steer: axes.steer * 0.3,
+                throttle: -1.0,
+                pitch: -1.0,
+                boost: false,
+            }
+        } else if race.started && !parked {
             FlightInput {
                 steer: axes.steer,
                 throttle: axes.throttle,
@@ -676,7 +695,7 @@ fn ai_input(
     }
 }
 
-fn integrate(
+pub(crate) fn integrate(
     time: Res<Time>,
     mut race: ResMut<Race>,
     mut cams: Query<&mut ChaseCamera>,
@@ -688,6 +707,7 @@ fn integrate(
         &mut Velocity,
         &mut Flap,
         Option<&Player>,
+        Option<&Parked>,
     )>,
     mut reeds: Query<(&GlobalTransform, &mut ReedClump)>,
     obstacles: Query<(&GlobalTransform, &Obstacle)>,
@@ -699,9 +719,43 @@ fn integrate(
     if dt <= f32::EPSILON {
         return;
     }
-    for (mut tf, mut r, input, mut vel, mut flap, player) in &mut q {
+    for (mut tf, mut r, input, mut vel, mut flap, player, parked) in &mut q {
         let is_player = player.is_some();
         let p = tf.translation;
+
+        // --- waiting for its rider ------------------------------------
+        if let Some(parked) = parked {
+            let ground = terrain.0.surface(p.x, p.z);
+            let next = match parked.summon {
+                Some(target) if (target - p).xz().length() > 3.0 => {
+                    // Whistled for: fly over, low and quick.
+                    let to = (target - p).with_y(0.0);
+                    let dir = to.normalize();
+                    r.speed += (16.0 - r.speed) * (1.0 - (-2.0 * dt).exp());
+                    let wanted = (-dir.x).atan2(-dir.z);
+                    r.yaw += wrap_angle(wanted - r.yaw) * (1.0 - (-4.0 * dt).exp());
+                    let step = (r.speed * dt).min(to.length());
+                    let mut n = p + dir * step;
+                    let ahead = terrain.0.surface(n.x, n.z).max(ground);
+                    n.y += (ahead + 3.0 - n.y) * (1.0 - (-3.0 * dt).exp());
+                    flap.intensity = 0.6;
+                    n
+                }
+                _ => {
+                    r.speed *= 1.0 - 3.0 * dt;
+                    let mut n = p;
+                    n.y += (ground + 0.7 - n.y) * (1.0 - (-2.5 * dt).exp());
+                    flap.intensity = 0.1;
+                    n
+                }
+            };
+            r.roll *= 1.0 - 4.0 * dt;
+            r.pitch *= 1.0 - 4.0 * dt;
+            vel.0 = (next - p) / dt;
+            tf.translation = next;
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, r.yaw, r.pitch * 0.7, r.roll);
+            continue;
+        }
 
         // --- bucking (low trust) -------------------------------------
         if is_player && r.buck <= 0.0 && race.started {

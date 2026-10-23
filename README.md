@@ -23,23 +23,40 @@ ambience — and so is every monolith, orb, veil and sigil, picture and hum alik
 Low trust at race time means the creature *bucks* — short bursts where it takes the
 controls away from you.
 
-### Explore: the endless marsh
+### Explore: the endless world
 
 `F4` (or `--explore`) is free flight through a world with no edge. Every visit draws a
 new world: its terrain, its light and every landmark in it, the way an alea work
 draws a new edition at every run. `N` draws another; `--seed 0x2a` brings one back.
-The HUD names the biome below, the edition of the nearest landmark, and how many
+The HUD names the land below, the edition of the nearest landmark, and how many
 editions you've found.
+
+The world is lived in. Seven lands — marsh, fungal bloom, bone dunes, crystal flats, a
+field of monoliths, wooded groves and a **mountain range** that climbs above the fog —
+with **rivers** cut across all of them. The tribe has built **stilt villages** in the
+shallows, **walled towns** on flattened ground and **holds** of towers on the mountain
+shoulders, with people walking between the houses and torches burning. Herds of
+**grazers** drift over the grass, **waders** stalk the pools and take off when you
+come close, flocks of **kites** ride the air over the high lands, and **leapers**
+break the surface of the lakes.
+
+**On foot.** Press `F` in flight and the Ephemera comes down; Judith slides off its
+back and the camera settles over her shoulder. She walks, runs, jumps, wades and swims
+through the world at her own height — under the mushrooms, along the walkways, into
+the towns — with `WASD` relative to the camera and the mouse (or the arrows) turning
+it. The creature waits where you left it, or comes when whistled: `F` far from it
+calls it over, `F` beside it puts her back in the saddle.
 
 ## Controls
 
 | | |
 |---|---|
-| On foot | `W/S` walk · `A/D` turn · `C` crouch · `Shift` sprint · `Space` throw net |
+| Stalk | `W/S` walk · `A/D` turn · `C` crouch · `Shift` sprint · `Space` throw net |
 | Camp | `1`–`4` pick what to do with the dawn · `Enter` ride to the Gathering |
 | Flight | `W/S` throttle · `A/D` bank · `Q` dive / `E` climb · `Shift` boost |
 | Anywhere | `Enter` confirm · `Esc` back to title / quit |
-| Explore | flight controls · `N` new world |
+| Explore, flying | flight controls · `F` land and dismount · `N` new world |
+| Explore, on foot | `WASD` walk (camera-relative) · mouse / arrows look · `Shift` run · `Space` jump · `C` crouch · `F` mount (beside the Ephemera) or whistle it over |
 | Sound | `M` mute · `--mute` start muted |
 | Shortcuts | `F1` stalk · `F2` tether · `F3` race (with a pre-tamed mount) · `F4` explore |
 
@@ -94,21 +111,24 @@ src/
 ├── state.rs       GamePhase, EphemeraStats, RunLog, PhaseScoped cleanup
 ├── input.rs       InputAxes — one sampled input resource for all phases
 ├── components.rs  Shared markers (Judith, Ephemera, Velocity, CameraTarget)
-├── terrain.rs     The world's shape: regions of alea editions, blended; climate; flattening
+├── terrain.rs     The world's shape: regions of alea editions, blended; climate; rivers; settlement sites
 ├── world.rs       Chunk streaming on the compute pool; ground meshes + painted textures, props, landmarks
+├── settlement.rs  Stilt villages, walled towns, mountain holds; villagers, torches, banners
+├── fauna.rs       Waders, grazers, kites, leapers: jointed animals that roam and flee
 ├── art.rs         alea pictures: editions rendered off-thread, cached, animated
 ├── audio.rs       alea sound: ambience by region, landmark hums in space, wings, music, chimes
 ├── sky.rs         Sky dome, sun, clouds, distant mesas, per-mood fog palette
 ├── models.rs      Optional GLB overrides (meshy.ai etc.) swapped in for placeholders
 ├── creature.rs    The Ephemera built from primitives; wing/leg/body animation
 ├── rig.rs         Rigs static models at load (wings, humanoid); poses; walk/crouch/ride
-├── camera.rs      Chase camera: lag, speed-FOV, roll, shake
+├── camera.rs      Chase camera: lag, speed-FOV, roll, shake; orbit camera on foot
 ├── hud.rs         One persistent HUD; phases write into the `Hud` resource
 ├── title.rs       Title screen
 ├── capture.rs     Phase I  — awareness model, cover, net throw, spook & flee
 ├── taming.rs      Phase II — dawn loop, four actions, escape condition
 ├── racing.rs      Phase III — flight model, track spline, gates, AI, speed lines, results
-└── explore.rs     Free flight through an endless world
+├── explore.rs     Free flight through an endless world
+└── onfoot.rs      Landing, dismounting, the third-person walker, whistling, remounting
 
 assets/alea/       the alea works: land/ (biomes), sound/ (music, wings, chimes), landmarks
 assets/models/     optional GLB models + meshy prompts
@@ -119,12 +139,20 @@ tools/meshy-gen/   generates those models with the Meshy API
 
 The world is a sea of 512 m regions. Each region is an edition of one of the land
 works in [`assets/alea/land/`](assets/alea/land/) (marsh, fungal bloom, bone dunes,
-crystal flats, field of monoliths), chosen by a climate map so similar lands cluster.
-The game reads a land work's first `render image` as the **relief** (the picture is
-the land: black is the lake bottom, 30 % grey the shoreline, white the peaks), its
-second as the **ground painting**, and its `render sound` as the region's
-**ambience**. Relief and painting are blended between neighbouring regions by
-distance, so editions meet without seams.
+crystal flats, field of monoliths, grove, peaks), chosen by a climate map so similar
+lands cluster. The game reads a land work's first `render image` as the **relief**
+(the picture is the land: black is the lake bottom, 30 % grey the shoreline, white
+the peaks; the render's `range` says how high white is, so `peaks.alea` with
+`range: [0, 5]` rises to 280 m), its second as the **ground painting**, and its
+`render sound` as the region's **ambience**. Relief and painting are blended between
+neighbouring regions by distance, so editions meet without seams.
+
+Two things run over the lands without regard for their borders. **Rivers** follow the
+zero lines of one slow noise across the whole world, carved into whatever relief they
+cross: a reed-lined channel in the lowlands, a gorge in the hills. **Settlement sites**
+are drawn on a 448 m grid from the seed; the tribe flattens the ground for a town or a
+hold and drives stilts where the land is wet, and the chunks around build the houses,
+the walkways, the torches and the people.
 
 The ground streams in 128 m chunks around whoever the camera follows: each chunk's
 heights and its 96 × 96 painted texture are sampled from the alea programs on the
