@@ -266,18 +266,31 @@ impl Api {
     /// Looks an action up in Meshy's animation library by name: the best
     /// match is the shortest name containing the words asked for.
     fn find_action(&self, name: &str) -> Result<(u64, String), String> {
+        // The library is a bare array (no pages); `search` matches names
+        // and keys. Search on the first word so "crouch walk" finds
+        // "Crouched Walking" too.
+        let first = name.split_whitespace().next().unwrap_or(name);
         let v = self.get(&format!(
-            "/openapi/v1/animations/library?search={}&page_size=50",
-            name.replace(' ', "%20")
+            "/openapi/v1/animations/library?search={}",
+            first.replace(' ', "%20")
         ))?;
-        let items = v["result"]
+        let items: Vec<Value> = v
             .as_array()
+            .or_else(|| v["result"].as_array())
             .or_else(|| v["result"]["items"].as_array())
-            .or_else(|| v["result"]["data"].as_array())
             .or_else(|| v["data"].as_array())
             .cloned()
             .unwrap_or_default();
+        if items.is_empty() {
+            return Err(format!(
+                "no animation named like `{name}` in Meshy's library (response: {})",
+                v.to_string().chars().take(200).collect::<String>()
+            ));
+        }
         let wanted = name.to_ascii_lowercase();
+        // Every word asked for must appear; the shortest such name wins,
+        // an exact match first.
+        let words: Vec<String> = wanted.split_whitespace().map(str::to_string).collect();
         let mut best: Option<(usize, u64, String)> = None;
         for it in &items {
             let n = it["name"].as_str().unwrap_or("");
@@ -285,12 +298,11 @@ impl Api {
                 continue;
             };
             let ln = n.to_ascii_lowercase();
-            let score = if ln == wanted {
+            let lk = it["key"].as_str().unwrap_or("").to_ascii_lowercase().replace('_', " ");
+            let score = if ln == wanted || lk == wanted {
                 0
-            } else if ln.starts_with(&wanted) {
+            } else if words.iter().all(|w| ln.contains(w) || lk.contains(w)) {
                 1 + ln.len()
-            } else if ln.contains(&wanted) {
-                100 + ln.len()
             } else {
                 continue;
             };
@@ -298,15 +310,17 @@ impl Api {
                 best = Some((score, id, n.to_string()));
             }
         }
-        best.map(|(_, id, n)| (id, n))
-            .or_else(|| {
-                items.first().and_then(|it| {
-                    it["action_id"]
-                        .as_u64()
-                        .map(|id| (id, it["name"].as_str().unwrap_or("?").to_string()))
-                })
-            })
-            .ok_or_else(|| format!("no animation named like `{name}` in Meshy's library"))
+        best.map(|(_, id, n)| (id, n)).ok_or_else(|| {
+            let seen: Vec<&str> = items
+                .iter()
+                .filter_map(|it| it["name"].as_str())
+                .take(30)
+                .collect();
+            format!(
+                "no animation named like `{name}` in Meshy's library; names containing `{first}`: {}",
+                seen.join(", ")
+            )
+        })
     }
 
     /// Polls until the task finishes. Returns the final task JSON.
