@@ -1,0 +1,13 @@
+// Hauler — a boxy cargo craft with side pods.
+
+work Hauler(depth = 0) {
+  let core = rect(0.5, 0.5, 0.36, 0.86, 0, 0.01)
+  let pods = merge(rect(0.2, 0.6, 0.14, 0.5, 0, 0.01), rect(0.8, 0.6, 0.14, 0.5, 0, 0.01))
+  let cab  = rect(0.5, 0.18, 0.28, 0.16, 0, 0.01)
+  field shape = clamp(core * 0.45 + pods * 0.3 + cab * 0.25, 0, 1)
+  render sculpture(shape, side: ~between(10, 14), relief: 0.2)
+
+  render image(core + pods * 0.5 + cab * 2, range: [0, 3],
+               palette: ["#5a6068", "#c8a040", "#d8dcdc", "#203040"])
+  render image(pods * step(0.9, fract(y * 6)) + cab, range: [0, 1], palette: ["#000000", "#ffb040"])
+}

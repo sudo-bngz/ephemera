@@ -1,0 +1,14 @@
+// Hive — an organic tower grown in swellings, as if it were alive.
+
+work Hive(depth = 0) {
+  let h     = 1 - y
+  let swell = 0.18 * sin(h * pi * ~between(4, 8)) * (1 - h)
+  let lumps = 0.06 * noise(cos(x * 2 * pi) * 2, sin(x * 2 * pi) * 2, h * 6)
+  field shape = clamp(0.55 - 0.35 * h + swell + lumps + 0.1 * depth * lumps, 0.04, 1)
+  render sculpture(shape, side: ~between(22, 36), relief: ~between(2.5, 4.5))
+
+  render image(clouds(scale: 6) * 0.6 + h * 0.4, range: [0, 1],
+               palette: ["#5a4a6a", "#9a80b0", "#d8c8e8", "#f0e8f4"])
+  let pores = step(0.82, noise(cos(x * 2 * pi) * 6, sin(x * 2 * pi) * 6, h * 30) * 0.5 + 0.5)
+  render image(pores, range: [0, 1], palette: ["#000000", "#ff9040"])
+}

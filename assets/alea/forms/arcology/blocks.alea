@@ -1,0 +1,17 @@
+// Blocks — a district of towers on a round platform, streets between them.
+
+work Blocks(depth = 0) {
+  let cells   = choose { 6 | 7 | 8 | 9 | 10 }
+  let street  = step(0.16, fract(x * cells)) * step(0.16, fract(y * cells))
+  let heights = posterize(clouds(scale: cells, detail: 2), levels: 7)
+  let round   = 1 - smoothstep(0.42, 0.48, distance(x, y, 0.5, 0.5))
+  let core    = 1 - smoothstep(0.0, 0.25, distance(x, y, 0.5, 0.5))
+  field shape = clamp((heights * heights * 1.3 + core * 0.5) * street * round + round * 0.03, 0, 1)
+  render sculpture(shape, side: ~between(120, 180), relief: ~between(0.9, 1.3), resolution: 80)
+
+  render image(heights + street * 0.2, range: [0, 1.2],
+               palette: ["#30343c", "#6a7480", "#c8d0d8", "#e8d8c0"])
+  let windows = step(0.6, fract(x * cells * 12)) * step(0.5, fract(y * cells * 12)) * street
+  render image(windows * 0.6 + (1 - street) * round * 0.4, range: [0, 1],
+               palette: ["#000000", "#2a1a00", "#ffc060", "#fff0d0"])
+}

@@ -1083,8 +1083,13 @@ fn spawn_chunk(
                 if h < SEA_LEVEL + 0.3 || !solid_ok(w) {
                     continue;
                 }
-                let height = rng.gen_range(7.0..16.0);
-                kids.push(tree(commands, a, &mut rng, local(l, h), height));
+                if rng.gen_bool(0.6) {
+                    // An alea tree (forms.rs): every world grows its own.
+                    kids.push(form_tree(commands, &mut rng, local(l, h)));
+                } else {
+                    let height = rng.gen_range(7.0..16.0);
+                    kids.push(tree(commands, a, &mut rng, local(l, h), height));
+                }
             }
             for _ in 0..14 {
                 let (l, w, h) = spot(&mut rng);
@@ -1125,7 +1130,15 @@ fn spawn_chunk(
                 }
             }
         }
-        Props::Marsh | Props::None => {}
+        Props::Marsh | Props::None => {
+            // Jelly and glass trees on the dry patches of the marsh.
+            for _ in 0..rng.gen_range(0..4) {
+                let (l, w, h) = spot(&mut rng);
+                if h > SEA_LEVEL + 0.4 && solid_ok(w) {
+                    kids.push(form_tree(commands, &mut rng, local(l, h)));
+                }
+            }
+        }
     }
 
     // --- the tribe and the beasts -------------------------------------------
@@ -1147,6 +1160,14 @@ fn spawn_chunk(
         &mut rng,
         &mut kids,
     );
+
+    // --- a lone spire now and then, visible from far off ------------------------
+    if rng.gen_bool(0.035) {
+        let (l, w, h) = spot(&mut rng);
+        if h > SEA_LEVEL + 0.5 && solid_ok(w) {
+            kids.push(form_spire(commands, &mut rng, local(l, h)));
+        }
+    }
 
     // --- landmarks anywhere (rarer outside the monolith field) ---------------
     let roll = |rng: &mut StdRng, p: f64| rng.gen_bool(p);
@@ -1255,6 +1276,50 @@ fn grow_props(
             commands.entity(e).remove::<Grow>();
         }
     }
+}
+
+/// A tree sculpted by alea, swaying like the others.
+fn form_tree(commands: &mut Commands, rng: &mut StdRng, at: Vec3) -> Entity {
+    let yaw = rng.gen_range(0.0..std::f32::consts::TAU);
+    let s = rng.gen_range(0.8..1.4);
+    commands
+        .spawn((
+            Transform::from_translation(at)
+                .with_rotation(Quat::from_rotation_y(yaw))
+                .with_scale(Vec3::splat(s)),
+            Visibility::default(),
+            Sway {
+                phase: rng.gen_range(0.0..std::f32::consts::TAU),
+                amount: 0.02,
+                yaw,
+            },
+            crate::forms::FormSlot {
+                kind: crate::forms::FormKind::Tree,
+                pick: rng.r#gen(),
+                scale: s,
+                solid: true,
+            },
+        ))
+        .id()
+}
+
+/// A lone spire out in the wilds: a beacon on the skyline.
+fn form_spire(commands: &mut Commands, rng: &mut StdRng, at: Vec3) -> Entity {
+    let s = rng.gen_range(0.7..1.3);
+    commands
+        .spawn((
+            Transform::from_translation(at)
+                .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..6.0)))
+                .with_scale(Vec3::splat(s)),
+            Visibility::default(),
+            crate::forms::FormSlot {
+                kind: crate::forms::FormKind::Tower,
+                pick: rng.r#gen(),
+                scale: s,
+                solid: true,
+            },
+        ))
+        .id()
 }
 
 /// A bulb tree: a tapering trunk and a cluster of round canopies, leaning

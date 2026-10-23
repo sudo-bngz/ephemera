@@ -1,0 +1,16 @@
+// Dome — a ribbed shell over a settlement, with ring buildings at its feet.
+
+work Dome(depth = 0) {
+  let d     = distance(x, y, 0.5, 0.5)
+  let shell = sqrt(max(0, 1 - d * d / 0.12))
+  let a     = atan2(y - 0.5, x - 0.5)
+  let ribs  = 0.04 * smoothstep(0.85, 1.0, abs(cos(a * choose { 6 | 8 | 10 | 12 })))
+  let ring  = 0.3 * (1 - smoothstep(0.0, 0.025, abs(d - 0.42)))
+  field shape = clamp(shell * 0.8 + ribs * shell + ring, 0, 1)
+  render sculpture(shape, side: ~between(90, 140), relief: ~between(0.6, 0.9), resolution: 72)
+
+  render image(shell + ribs * 6, range: [0, 1.4],
+               palette: ["#203040", "#406070", "#b0d8e0", "#ffffff"])
+  render image(ribs * 10 * shell + ring * 1.5, range: [0, 1],
+               palette: ["#000000", "#003040", "#40f0ff"])
+}

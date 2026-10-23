@@ -1,0 +1,16 @@
+// Jelly tree — a pale bulb trunk under a cap that trails a fringe of
+// filaments, like a jellyfish turned upside down.
+
+work JellyTree(depth = 0) {
+  let h      = 1 - y
+  let trunk  = 0.28 - 0.18 * h + 0.06 * sin(h * 9)
+  let cap    = 0.75 * sqrt(max(0, 1 - (h - 0.82) * (h - 0.82) / 0.012))
+  let fringe = (0.45 + 0.25 * abs(sin(x * 2 * pi * choose { 10 | 12 | 14 | 16 | 18 })))
+               * smoothstep(0.4, 0.55, h) * (1 - smoothstep(0.72, 0.78, h))
+  field shape = clamp(max(max(trunk, cap), fringe), 0, 1)
+  render sculpture(shape, side: ~between(8, 13), relief: ~between(1.0, 1.4))
+
+  render image(h + clouds(scale: 7) * 0.2, range: [0, 1.2],
+               palette: ["#c8c0c8", "#d8c8e8", "#b090d8", "#f0d8ff"])
+  render image(fringe * 0.8 + cap * 0.3, range: [0, 1], palette: ["#000000", "#300840", "#e070ff"])
+}

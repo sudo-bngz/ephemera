@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::forms::{FormKind, FormSlot};
 use crate::models::{ModelKind, Swappable};
 use crate::terrain::{Props, SEA_LEVEL, Site, SiteKind, Terrain};
 use crate::world::{Obstacle, WetlandAssets};
@@ -37,6 +38,18 @@ pub struct Villager {
 pub struct Torch {
     pub phase: f32,
     pub size: f32,
+}
+
+/// A craft going round a city: on a ring road, or circling in the air.
+#[derive(Component, Debug)]
+pub struct Traffic {
+    pub radius: f32,
+    /// Radians per second (signed: the direction).
+    pub speed: f32,
+    pub angle: f32,
+    pub height: f32,
+    /// Flying craft weave up and down.
+    pub weave: f32,
 }
 
 /// Cloth snapping in the wind.
@@ -166,6 +179,18 @@ pub fn spawn(
 
     let mut people: Vec<(Vec3, f32)> = Vec::new();
     match site.kind {
+        SiteKind::City => {
+            city(
+                commands,
+                meshes,
+                materials,
+                sa,
+                site,
+                root,
+                &mut rng,
+                &mut people,
+            );
+        }
         SiteKind::Stilts => {
             // Huts on a loose ring around a central platform, decks joined
             // by plank walkways.
@@ -431,6 +456,7 @@ pub fn spawn(
         SiteKind::Stilts => rng.gen_range(3..6),
         SiteKind::Town => rng.gen_range(5..9),
         SiteKind::Hold => rng.gen_range(2..4),
+        SiteKind::City => rng.gen_range(10..16),
     };
     for _ in 0..count {
         let (home, radius) = people[rng.gen_range(0..people.len())];
@@ -450,6 +476,227 @@ pub fn spawn(
             },
             ChildOf(root),
         ));
+    }
+}
+
+/// A city: an arcology at the heart, spires on a ring around it, ring roads
+/// and avenues lit along their edges, trees on the avenues, craft on the
+/// roads and in the air. The big shapes are alea forms (`forms.rs`): every
+/// world draws its own.
+#[allow(clippy::too_many_arguments)]
+fn city(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    sa: &SettlementAssets,
+    site: &Site,
+    root: Entity,
+    rng: &mut StdRng,
+    people: &mut Vec<(Vec3, f32)>,
+) {
+    let r = site.radius;
+    let road = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.10, 0.11, 0.13),
+        perceptual_roughness: 0.6,
+        metallic: 0.3,
+        ..default()
+    });
+    let plaza = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.78, 0.80, 0.80),
+        perceptual_roughness: 0.4,
+        ..default()
+    });
+    let strip = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.4, 0.95, 1.0),
+        emissive: LinearRgba::rgb(2.0, 7.0, 9.0),
+        unlit: true,
+        ..default()
+    });
+    let ring =
+        |inner: f32, outer: f32| Mesh::from(Annulus::new(inner, outer).mesh().resolution(96));
+    let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    let roads = [r * 0.52, r * 0.88];
+    let avenues = rng.gen_range(4..7);
+    let turn = rng.gen_range(0.0..std::f32::consts::TAU);
+    commands.entity(root).with_children(|p| {
+        // The plaza the city stands on.
+        p.spawn((
+            Mesh3d(meshes.add(Circle::new(r * 0.97).mesh().resolution(96))),
+            MeshMaterial3d(plaza.clone()),
+            Transform::from_xyz(0.0, 0.04, 0.0).with_rotation(flat),
+        ));
+        // Ring roads with lit edges.
+        for rr in roads {
+            p.spawn((
+                Mesh3d(meshes.add(ring(rr - 5.0, rr + 5.0))),
+                MeshMaterial3d(road.clone()),
+                Transform::from_xyz(0.0, 0.08, 0.0).with_rotation(flat),
+            ));
+            for edge in [rr - 5.0, rr + 5.0] {
+                p.spawn((
+                    Mesh3d(meshes.add(ring(edge - 0.18, edge + 0.18))),
+                    MeshMaterial3d(strip.clone()),
+                    Transform::from_xyz(0.0, 0.1, 0.0).with_rotation(flat),
+                    NotShadowCaster,
+                ));
+            }
+        }
+        // Avenues from the heart to the edge.
+        for k in 0..avenues {
+            let a = turn + k as f32 / avenues as f32 * std::f32::consts::TAU;
+            let (from, to) = (r * 0.3, r * 0.97);
+            let mid = (from + to) * 0.5;
+            let at = Vec3::new(a.cos() * mid, 0.07, a.sin() * mid);
+            let yaw = Quat::from_rotation_y(-a);
+            p.spawn((
+                Mesh3d(sa.block.clone()),
+                MeshMaterial3d(road.clone()),
+                Transform::from_translation(at)
+                    .with_rotation(yaw)
+                    .with_scale(Vec3::new(to - from, 0.06, 8.0)),
+            ));
+            for side in [-4.2, 4.2] {
+                p.spawn((
+                    Mesh3d(sa.block.clone()),
+                    MeshMaterial3d(strip.clone()),
+                    Transform::from_translation(at + yaw * Vec3::new(0.0, 0.03, side))
+                        .with_rotation(yaw)
+                        .with_scale(Vec3::new(to - from, 0.05, 0.3)),
+                    NotShadowCaster,
+                ));
+                // Trees along the avenue.
+                for t in 0..4 {
+                    let d = from + 14.0 + t as f32 * (to - from - 28.0) / 3.0;
+                    let off = yaw * Vec3::new(0.0, 0.0, side * 2.2);
+                    let s = rng.gen_range(0.7..1.1);
+                    p.spawn((
+                        Transform::from_translation(Vec3::new(a.cos() * d, 0.0, a.sin() * d) + off)
+                            .with_scale(Vec3::splat(s)),
+                        Visibility::default(),
+                        FormSlot {
+                            kind: FormKind::Tree,
+                            pick: rng.r#gen(),
+                            scale: s,
+                            solid: false,
+                        },
+                    ));
+                }
+            }
+        }
+        // The heart: an arcology.
+        p.spawn((
+            Transform::from_xyz(0.0, 0.0, 0.0)
+                .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..6.0))),
+            Visibility::default(),
+            FormSlot {
+                kind: FormKind::Arcology,
+                pick: rng.r#gen(),
+                scale: 1.0,
+                solid: true,
+            },
+        ));
+        // Spires between the roads, avoiding the avenues.
+        let spires = rng.gen_range(6..12);
+        for k in 0..spires {
+            let a = turn
+                + (k as f32 + 0.5) / spires as f32 * std::f32::consts::TAU
+                + rng.gen_range(-0.12..0.12);
+            let d = rng.gen_range(r * 0.64..r * 0.78);
+            let s = rng.gen_range(0.6..1.2);
+            p.spawn((
+                Transform::from_xyz(a.cos() * d, 0.0, a.sin() * d)
+                    .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..6.0)))
+                    .with_scale(Vec3::splat(s)),
+                Visibility::default(),
+                FormSlot {
+                    kind: FormKind::Tower,
+                    pick: rng.r#gen(),
+                    scale: s,
+                    solid: true,
+                },
+            ));
+        }
+        // Craft on the ring roads, both ways…
+        for (lane, rr) in roads.iter().enumerate() {
+            for k in 0..rng.gen_range(5..10) {
+                let dir = if (k + lane) % 2 == 0 { 1.0 } else { -1.0 };
+                let lane_r = rr + 2.4 * dir;
+                p.spawn((
+                    Transform::default(),
+                    Visibility::default(),
+                    Traffic {
+                        radius: lane_r,
+                        speed: dir * rng.gen_range(14.0..24.0) / lane_r,
+                        angle: rng.gen_range(0.0..std::f32::consts::TAU),
+                        height: 0.9,
+                        weave: 0.0,
+                    },
+                    FormSlot {
+                        kind: FormKind::Vehicle,
+                        pick: rng.r#gen(),
+                        scale: 1.0,
+                        solid: false,
+                    },
+                ));
+            }
+        }
+        // …and in the air.
+        for _ in 0..rng.gen_range(8..16) {
+            let rr = rng.gen_range(r * 0.35..r * 1.3);
+            p.spawn((
+                Transform::default(),
+                Visibility::default(),
+                Traffic {
+                    radius: rr,
+                    speed: (if rng.gen_bool(0.5) { 1.0 } else { -1.0 }) * rng.gen_range(20.0..40.0)
+                        / rr,
+                    angle: rng.gen_range(0.0..std::f32::consts::TAU),
+                    height: rng.gen_range(35.0..140.0),
+                    weave: rng.gen_range(2.0..8.0),
+                },
+                FormSlot {
+                    kind: FormKind::Vehicle,
+                    pick: rng.r#gen(),
+                    scale: rng.gen_range(1.0..1.6),
+                    solid: false,
+                },
+            ));
+        }
+        // Lamps along the outer road.
+        for k in 0..16 {
+            let a = k as f32 / 16.0 * std::f32::consts::TAU;
+            let d = roads[1] + 7.0;
+            torch(
+                p,
+                sa,
+                Vec3::new(a.cos() * d, 0.0, a.sin() * d),
+                0.8,
+                k as f32,
+            );
+        }
+    });
+    people.push((Vec3::ZERO, r * 0.5));
+    people.push((Vec3::ZERO, r * 0.9));
+}
+
+/// Craft go round their circles, facing the way they go, banking in the air.
+fn drive_traffic(time: Res<Time>, mut q: Query<(&mut Traffic, &mut Transform)>) {
+    let dt = time.delta_secs();
+    let t = time.elapsed_secs();
+    for (mut c, mut tf) in &mut q {
+        c.angle += c.speed * dt;
+        let (s, co) = c.angle.sin_cos();
+        let y = c.height + c.weave * (t * 0.3 + c.radius).sin();
+        tf.translation = Vec3::new(co * c.radius, y, s * c.radius);
+        // Tangent of the circle, in the direction of travel.
+        let ahead = Vec3::new(-s, 0.0, co) * c.speed.signum();
+        let yaw = (-ahead.x).atan2(-ahead.z);
+        let bank = if c.weave > 0.0 {
+            -0.35 * c.speed.signum()
+        } else {
+            0.0
+        };
+        tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, 0.0, bank);
     }
 }
 
@@ -680,7 +927,10 @@ impl Plugin for SettlementPlugin {
         app.world_mut()
             .run_system_once(setup_assets)
             .expect("settlement assets need Assets<Mesh> and Assets<StandardMaterial>");
-        app.add_systems(Update, (wander, flicker).in_set(crate::GameSet::Simulation));
+        app.add_systems(
+            Update,
+            (wander, flicker, drive_traffic).in_set(crate::GameSet::Simulation),
+        );
     }
 }
 

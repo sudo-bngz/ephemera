@@ -24,6 +24,7 @@ mod components;
 mod creature;
 mod explore;
 mod fauna;
+mod forms;
 mod hud;
 mod input;
 mod menu;
@@ -98,6 +99,7 @@ impl Plugin for GamePlugin {
             racing::RacingPlugin,
             explore::ExplorePlugin,
             onfoot::OnFootPlugin,
+            forms::FormsPlugin,
             reality::RealityPlugin,
         ));
     }
@@ -1171,6 +1173,103 @@ mod smoke {
         assert_eq!(
             app.world().get::<Visibility>(judith),
             Some(&Visibility::Inherited)
+        );
+    }
+
+    /// Cities: alea sculpts the arcology, the spires, the trees and the
+    /// craft; the craft go round the roads and the sky.
+    #[test]
+    fn cities_are_sculpted_by_alea() {
+        use crate::forms::{Dressed, FormKind, FormSlot, Forms};
+        use crate::settlement::Traffic;
+        use crate::terrain::SiteKind;
+        let mut app = app();
+        explore(&mut app, 2026);
+        let terrain = app
+            .world()
+            .resource::<crate::world::WorldTerrain>()
+            .0
+            .clone();
+        let city = terrain
+            .sites_near(Vec2::ZERO, 8000.0)
+            .into_iter()
+            .filter(|s| s.kind == SiteKind::City)
+            .min_by(|a, b| a.centre.length().total_cmp(&b.centre.length()))
+            .expect("a city within 8 km");
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::racing::Player>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .unwrap()
+            .translation = Vec3::new(city.centre.x, city.height + 60.0, city.centre.y);
+        settle(&mut app, 30_000);
+        let start = std::time::Instant::now();
+        while app.world().resource::<Forms>().pending() > 0 {
+            app.update();
+            assert!(start.elapsed().as_secs() < 60, "forms never finished");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        tick(&mut app, 3);
+        let dressed: Vec<(FormKind, Vec3, Vec3)> = app
+            .world_mut()
+            .query::<(&FormSlot, &Dressed, &GlobalTransform, Has<Mesh3d>)>()
+            .iter(app.world())
+            .filter(|(_, d, _, m)| *m && d.0 != Vec3::ZERO)
+            .map(|(s, d, t, _)| (s.kind, d.0, t.translation()))
+            .collect();
+        let near = |k: FormKind| {
+            dressed
+                .iter()
+                .filter(|(kind, _, at)| {
+                    *kind == k && at.xz().distance(city.centre) < city.radius * 1.4
+                })
+                .count()
+        };
+        assert!(near(FormKind::Arcology) >= 1, "no arcology");
+        assert!(
+            near(FormKind::Tower) >= 6,
+            "only {} spires",
+            near(FormKind::Tower)
+        );
+        assert!(
+            near(FormKind::Vehicle) >= 8,
+            "only {} craft",
+            near(FormKind::Vehicle)
+        );
+        let tallest = dressed
+            .iter()
+            .filter(|(k, _, _)| *k == FormKind::Tower)
+            .map(|(_, s, _)| s.y)
+            .fold(0.0, f32::max);
+        assert!(tallest > 60.0, "the spires are small: {tallest:.0} m");
+        // The towers are solid.
+        let solid = app
+            .world_mut()
+            .query::<(&FormSlot, &crate::world::Obstacle)>()
+            .iter(app.world())
+            .filter(|(s, _)| s.kind == FormKind::Tower)
+            .count();
+        assert!(solid >= 6);
+        // Craft move.
+        let before: Vec<Vec3> = app
+            .world_mut()
+            .query_filtered::<&GlobalTransform, With<Traffic>>()
+            .iter(app.world())
+            .map(|t| t.translation())
+            .collect();
+        tick(&mut app, 30);
+        let after: Vec<Vec3> = app
+            .world_mut()
+            .query_filtered::<&GlobalTransform, With<Traffic>>()
+            .iter(app.world())
+            .map(|t| t.translation())
+            .collect();
+        assert!(
+            before.iter().zip(&after).all(|(a, b)| a.distance(*b) > 1.0),
+            "craft stand still"
         );
     }
 

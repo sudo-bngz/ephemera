@@ -1,0 +1,16 @@
+// Glass tree — a slim stalk under a round, glowing crown. A lathe, like the
+// towers: x round, y from the top (0) to the foot (1), field = radius 0–1.
+
+work GlassTree(depth = 0) {
+  let h     = 1 - y
+  let c     = ~between(0.68, 0.8)
+  let crown = 0.95 * sqrt(max(0, 1 - (h - c) * (h - c) / 0.05))
+  let trunk = 0.07 + 0.08 * (1 - smoothstep(0.0, 0.12, h))
+  let lobes = 0.08 * abs(sin(x * 2 * pi * choose { 3 | 4 | 5 | 6 }))
+  field shape = clamp(max(trunk, crown * (0.9 + lobes)), 0, 1)
+  render sculpture(shape, side: ~between(7, 12), relief: ~between(1.1, 1.7))
+
+  render image(smoothstep(0.4, 0.6, h) + clouds(scale: 5) * 0.2, range: [0, 1],
+               palette: ["#2a1a3a", "#5a3a7a", "#8ad0a0", "#d8ffe0"])
+  render image(crown * 0.7 + lobes, range: [0, 1], palette: ["#000000", "#103a20", "#60ff9a"])
+}

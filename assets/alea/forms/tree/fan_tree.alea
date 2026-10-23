@@ -1,0 +1,16 @@
+// Fan tree — a ribbed trunk opening into a wide scalloped disc.
+
+work FanTree(depth = 0) {
+  let h     = 1 - y
+  let top   = ~between(0.8, 0.9)
+  let disc  = smoothstep(top - 0.08, top, h) * (1 - smoothstep(top + 0.02, top + 0.08, h))
+  let scal  = 0.85 + 0.15 * sin(x * 2 * pi * choose { 7 | 9 | 11 | 13 })
+  let trunk = 0.06 + 0.02 * sin(h * 60) + 0.12 * (1 - smoothstep(0.0, 0.1, h))
+  field shape = clamp(max(trunk, disc * scal), 0, 1)
+  render sculpture(shape, side: ~between(9, 16), relief: ~between(0.8, 1.2))
+
+  render image(disc + h * 0.3, range: [0, 1],
+               palette: ["#4a2018", "#8a3a22", "#1e6a6a", "#40c0b0"])
+  render image(disc * step(0.5, fract(x * 40)) * 0.8, range: [0, 1],
+               palette: ["#000000", "#402000", "#ffb040"])
+}

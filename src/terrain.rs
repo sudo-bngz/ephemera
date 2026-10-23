@@ -94,6 +94,9 @@ pub enum SiteKind {
     Town,
     /// A hold of towers on a mountain shoulder.
     Hold,
+    /// A city: arcologies and spires sculpted by alea, ring roads, traffic
+    /// on the ground and in the air.
+    City,
 }
 
 /// A settlement: where it stands, how big, what kind. The ground under a
@@ -604,6 +607,8 @@ impl Land {
             return None;
         } else if props == Props::Peaks || mean > 60.0 {
             (SiteKind::Hold, 30.0, mean.max(SEA_LEVEL + 3.0))
+        } else if (h >> 12).is_multiple_of(3) {
+            (SiteKind::City, 150.0, mean.max(SEA_LEVEL + 2.0))
         } else {
             (SiteKind::Town, 40.0, mean.max(SEA_LEVEL + 2.0))
         };
@@ -718,6 +723,10 @@ impl Sampler {
     pub fn height(&mut self, x: f32, z: f32) -> f32 {
         let p = Vec2::new(x, z);
         let mut h = self.wild_height(p);
+        // Sites whose skirts overlap (a city reaches far) share the ground:
+        // each pulls toward its own height, a disc it covers fully wins, so
+        // every site stands flat on its own disc.
+        let (mut pull, mut target, mut weight) = (0.0f32, 0.0f32, 0.0f32);
         for s in &self.sites {
             if s.kind == SiteKind::Stilts {
                 continue;
@@ -725,8 +734,14 @@ impl Sampler {
             let d = p.distance(s.centre);
             if d < s.radius * 1.6 {
                 let k = 1.0 - smoothstep(s.radius, s.radius * 1.6, d);
-                h = lerp(h, s.height, k);
+                let w = k / (1.0001 - k);
+                pull = pull.max(k);
+                target += w * s.height;
+                weight += w;
             }
+        }
+        if weight > 0.0 {
+            h = lerp(h, target / weight, pull);
         }
         for f in &self.flatten {
             let d = p.distance(f.centre);

@@ -1,0 +1,22 @@
+// Spire — a ribbed ceramic tower with observation decks, tapering to a
+// beacon. Read by the game as a lathe (see forms/README.md): x goes round,
+// y runs from the tip (0) to the foot (1); the field is the radius, 0–1.
+
+work Spire(depth = 0) {
+  let h     = 1 - y
+  let ribs  = 0.035 * abs(sin(x * 2 * pi * choose { 6 | 8 | 10 | 12 | 14 }))
+  let deck1 = 0.22 * (1 - smoothstep(0.0, 0.018, abs(h - ~between(0.3, 0.45))))
+  let deck2 = 0.16 * (1 - smoothstep(0.0, 0.014, abs(h - ~between(0.6, 0.75))))
+  let foot  = 0.25 * (1 - smoothstep(0.0, 0.08, h))
+  field shape = clamp(0.62 - 0.5 * h + ribs + deck1 + deck2 + foot, 0.03, 1)
+  render sculpture(shape, side: ~between(16, 26), relief: ~between(4, 8))
+
+  // Pearl ceramic banded with celadon; dark glass on the decks.
+  let band = posterize(h, levels: choose { 5 | 6 | 7 | 8 | 9 })
+  render image(band * 0.6 + clouds(scale: 4) * 0.25 + deck1 * 2,
+               range: [0, 1], palette: ["#c8d4d4", "#e8ecea", "#a8c8c4", "#20303a"])
+  // Light: window slits in rows, the decks, the beacon.
+  let slits = step(0.55, fract(h * 90)) * step(0.62, fract(x * 32))
+  render image(slits * 0.7 + deck1 * 4 + deck2 * 4 + smoothstep(0.96, 1.0, h),
+               range: [0, 1], palette: ["#000000", "#103040", "#40e0ff", "#e0ffff"])
+}

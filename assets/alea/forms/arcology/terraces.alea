@@ -1,0 +1,20 @@
+// Terraces — an arcology in stepped rings around a central spire, cut by
+// avenues. Read as a relief seen from above: x, y across the footprint;
+// the field is the height, 0–1.
+
+work Terraces(depth = 0) {
+  let d      = distance(x, y, 0.5, 0.5)
+  let steps  = posterize(clamp(1 - d * 2.2, 0, 1), levels: choose { 5 | 6 | 7 | 8 | 9 })
+  let spire  = circle(0.5, 0.5, ~between(0.08, 0.14), 0.01)
+  let a      = atan2(y - 0.5, x - 0.5)
+  let avenue = smoothstep(0.9, 0.97, abs(cos(a * choose { 2 | 3 | 4 })))
+  field shape = clamp(max(steps * 0.62, spire) * (1 - 0.85 * avenue * (1 - spire)), 0, 1)
+  render sculpture(shape, side: ~between(110, 170), relief: ~between(0.9, 1.4), resolution: 72)
+
+  render image(steps + clouds(scale: 8) * 0.15, range: [0, 1],
+               palette: ["#9aa4a8", "#dfe4e2", "#b8d0cc", "#ffffff"])
+  // Lit edges of every terrace, the avenues' light strips.
+  let edge = smoothstep(0.0, 0.004, abs(fract(steps * 8) - 0.5) - 0.48)
+  render image(edge * 0.8 + avenue * 0.5 + spire * 0.3, range: [0, 1],
+               palette: ["#000000", "#0a2a3a", "#30d0ff", "#e0ffff"])
+}

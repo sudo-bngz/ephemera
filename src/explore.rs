@@ -146,6 +146,7 @@ fn hud(
     art: Res<Art>,
     sounds: Res<crate::audio::Sounds>,
     wg: Res<crate::world::WorldGen>,
+    forms: Res<crate::forms::Forms>,
     player: Query<(&Transform, &Velocity, &Rider, Has<Parked>), With<Player>>,
     walker: Query<(&Transform, &Velocity, &Walker), With<Judith>>,
     landmarks: Query<(&GlobalTransform, &Landmark, Option<&crate::reality::Portal>)>,
@@ -205,6 +206,11 @@ fn hud(
         (0, f) => format!(", {f} sound(s) failed"),
         (p, _) => format!(", rendering {p} sound(s)…"),
     };
+    if forms.pending() > 0 {
+        painting += &format!("\nalea: sculpting {} form(s)…", forms.pending());
+    } else if forms.ready() > 0 {
+        painting += &format!("\nalea: {} form(s) sculpted", forms.ready());
+    }
     if wg.pending() > 0 {
         painting += &format!("\nbuilding {} chunk(s)…", wg.pending());
     }

@@ -48,7 +48,11 @@ The world is lived in. Seven lands — marsh, fungal bloom, bone dunes, crystal 
 field of monoliths, wooded groves and a **mountain range** that climbs above the fog —
 with **rivers** cut across all of them. The clans have built **stilt habitats** in the
 shallows, **ceramic towns** on flattened ground and **holds** of spires on the mountain
-shoulders, with people walking between the domes under plasma lamps. Herds of
+shoulders, with people walking between the domes under plasma lamps. The colonies
+have **cities** too: an **arcology** at the heart, a ring of **spires** up to two
+hundred metres tall, ring roads and avenues lit along their edges, trees on the
+avenues, **ground craft** going round the roads and **flyers** circling between the
+towers. Lone spires stand out in the wild, and the groves grow alien trees. Herds of
 **grazers** drift over the grass, **waders** stalk the pools and take off when you
 come close, flocks of **kites** ride the air over the high lands, and **leapers**
 break the surface of the lakes.
@@ -139,7 +143,8 @@ src/
 ├── components.rs  Shared markers (Judith, Ephemera, Velocity, CameraTarget)
 ├── terrain.rs     The world's shape: regions of alea editions, blended; climate; rivers; settlement sites
 ├── world.rs       Chunk streaming on the compute pool; ground meshes + painted textures, props, landmarks
-├── settlement.rs  Stilt villages, walled towns, mountain holds; villagers, torches, banners
+├── settlement.rs  Stilt villages, towns, mountain holds, cities; villagers, lamps, traffic
+├── forms.rs       Buildings, trees and craft sculpted by alea: lathe and relief meshes, off-thread
 ├── fauna.rs       Waders, grazers, kites, leapers: jointed animals that roam and flee
 ├── art.rs         alea pictures: editions rendered off-thread, cached, animated
 ├── audio.rs       alea sound: ambience by region, landmark hums in space, wings, music, chimes
@@ -157,7 +162,7 @@ src/
 ├── reality.rs     The maze of realities: portals in the veils, the shift that morphs one world into the next
 └── onfoot.rs      Landing, dismounting, the third-person walker, whistling, remounting
 
-assets/alea/       the alea works: land/ (biomes), sound/ (music, wings, chimes), landmarks
+assets/alea/       the alea works: land/ (biomes), forms/ (buildings, trees, craft), sound/, landmarks
 assets/models/     optional GLB models + meshy prompts
 tools/meshy-gen/   generates those models with the Meshy API
 ```
@@ -205,6 +210,17 @@ Each landmark shows an edition: the work, and a seed derived from the world seed
 where it stands. Editions render on background threads, are cached on disk, and are
 animated by swapping frames on a material shared by every landmark showing that
 edition.
+
+### alea in the game: buildings, trees and craft
+
+The cities and much of the wild are sculpted by the works in
+[`assets/alea/forms/`](assets/alea/forms/): three towers (ribbed spire, needle, hive),
+three trees (glass, fan, jelly), three arcologies (terraces, blocks, dome) and two
+craft (skiff, hauler). A form work renders a `sculpture` — read as a lathe for towers
+and trees, as a height map for arcologies and craft — then a paint image and a glow
+image. Each world draws four editions of every work on the compute pool, so no two
+worlds have the same skyline. Drop a new work into a folder and it joins the pool;
+[`assets/alea/forms/README.md`](assets/alea/forms/README.md) has the conventions.
 
 ### alea in the game: sound
 

@@ -1,0 +1,16 @@
+// Needle — a thin mast carrying a glass bulb high up, like a seed head.
+
+work Needle(depth = 0) {
+  let h    = 1 - y
+  let at   = ~between(0.7, 0.88)
+  let bulb = 0.75 * exp(-(h - at) * (h - at) / 0.004)
+  let ring = 0.4 * (1 - smoothstep(0.0, 0.01, abs(h - at + 0.09)))
+  let foot = 0.45 * (1 - smoothstep(0.0, 0.06, h))
+  field shape = clamp(0.12 + bulb + ring + foot + 0.02 * sin(h * 2 * pi * 30), 0.03, 1)
+  render sculpture(shape, side: ~between(18, 30), relief: ~between(5, 9))
+
+  render image(h * 0.5 + bulb, range: [0, 1],
+               palette: ["#3a3f48", "#8a96a0", "#dfe6ec", "#7a5af0"])
+  render image(bulb * 1.2 + ring * 3 + step(0.97, fract(h * 40)) * 0.4, range: [0, 1],
+               palette: ["#000000", "#301060", "#b080ff", "#ffffff"])
+}
