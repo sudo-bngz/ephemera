@@ -66,16 +66,19 @@ impl ModelKind {
                 scale: 6.0,
                 yaw_deg: 180.0,
                 y: -1.0,
+                rig: Default::default(),
             },
             ModelKind::Judith => Fit {
                 scale: 1.8,
                 yaw_deg: 180.0,
                 y: 0.0,
+                rig: Default::default(),
             },
             _ => Fit {
                 scale: 1.0,
                 yaw_deg: 0.0,
                 y: 0.0,
+                rig: Default::default(),
             },
         }
     }
@@ -86,6 +89,7 @@ struct Fit {
     scale: f32,
     yaw_deg: f32,
     y: f32,
+    rig: crate::rig::RigTuning,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +106,19 @@ pub struct Models {
 impl Models {
     fn get(&self, kind: ModelKind) -> Option<&Model> {
         self.loaded.iter().find(|(k, _)| *k == kind).map(|(_, m)| m)
+    }
+
+    /// For tests: use `scene` for `kind`, with the default fit.
+    #[cfg(test)]
+    pub fn with(mut self, kind: ModelKind, scene: Handle<Scene>) -> Self {
+        self.loaded.push((
+            kind,
+            Model {
+                scene,
+                fit: kind.default_fit(),
+            },
+        ));
+        self
     }
 }
 
@@ -126,9 +143,12 @@ impl Swappable {
     }
 }
 
-/// Marks a model that replaced a placeholder (useful for animation hooks).
-#[derive(Component)]
-pub struct SwappedModel;
+/// Marks a model that replaced a placeholder; the rigger reads it.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SwappedModel {
+    pub kind: ModelKind,
+    pub rig: crate::rig::RigTuning,
+}
 
 fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
     let mut out = Vec::new();
@@ -155,6 +175,10 @@ fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
                 "scale" => fit.scale = v,
                 "yaw" => fit.yaw_deg = v,
                 "y" => fit.y = v,
+                // Rig thresholds (see rig.rs), fractions of the model's size.
+                "wing_hinge" => fit.rig.wing_hinge = v,
+                "wing_min_y" => fit.rig.wing_min_y = v,
+                "leg_max_y" => fit.rig.leg_max_y = v,
                 _ => warn!("models.cfg: unknown key `{k}`"),
             }
         }
@@ -218,7 +242,10 @@ fn swap_in_models(
         let fit = model.fit;
         let child = commands
             .spawn((
-                SwappedModel,
+                SwappedModel {
+                    kind: swap.kind,
+                    rig: fit.rig,
+                },
                 SceneRoot(model.scene.clone()),
                 Transform::from_xyz(0.0, fit.y * swap.size.y, 0.0)
                     .with_rotation(Quat::from_rotation_y(fit.yaw_deg.to_radians()))
@@ -332,16 +359,19 @@ mod tests {
 
 #[cfg(test)]
 mod gltf_tests {
-    //! Loads and spawns a real GLB (shaped like Meshy's output) through the
-    //! same plugins the game uses, minus the window and the GPU.
-    use bevy::prelude::*;
+    //! Real GLBs (shaped like Meshy's output) through the game's own
+    //! pipeline — swap, load, spawn, rig, animate — with the same plugins
+    //! as the game, minus the window and the GPU.
+    use super::*;
+    use crate::creature::Flap;
+    use crate::rig::{Gait, Rig, RigKind};
+    use bevy::mesh::skinning::SkinnedMesh;
     use bevy::render::RenderPlugin;
     use bevy::render::settings::{RenderCreation, WgpuSettings};
     use bevy::window::ExitCondition;
     use bevy::winit::WinitPlugin;
 
-    #[test]
-    fn meshy_like_glb_spawns() {
+    fn app() -> App {
         let mut app = App::new();
         app.add_plugins(
             DefaultPlugins
@@ -363,28 +393,142 @@ mod gltf_tests {
                     file_path: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures").into(),
                     ..default()
                 }),
-        );
+        )
+        .init_state::<crate::state::GamePhase>()
+        .init_resource::<crate::input::InputAxes>()
+        .add_plugins((ModelsPlugin, crate::rig::RigPlugin));
         app.finish();
         app.cleanup();
-        let scene = app
-            .world()
+        app
+    }
+
+    fn load(app: &mut App, file: &str) -> Handle<Scene> {
+        app.world()
             .resource::<AssetServer>()
-            .load(GltfAssetLabel::Scene(0).from_asset("model.glb"));
-        let root = app.world_mut().spawn(SceneRoot(scene)).id();
-        let mut spawned = false;
-        for _ in 0..500 {
+            .load(GltfAssetLabel::Scene(0).from_asset(file.to_string()))
+    }
+
+    fn run_until(app: &mut App, mut done: impl FnMut(&mut World) -> bool) -> bool {
+        for _ in 0..600 {
             app.update();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            let meshes = app
-                .world_mut()
-                .query_filtered::<Entity, With<Mesh3d>>()
-                .iter(app.world())
-                .count();
-            if meshes > 0 {
-                spawned = true;
-                break;
+            if done(app.world_mut()) {
+                return true;
             }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(spawned, "the GLB scene never spawned a mesh under {root:?}");
+        false
+    }
+
+    fn rig_of(world: &mut World) -> Option<(Vec<Entity>, RigKind)> {
+        world
+            .query::<&Rig>()
+            .iter(world)
+            .find(|r| {
+                !r.joints.is_empty() && r.to_char != Quat::IDENTITY || r.kind == RigKind::Wings
+            })
+            .map(|r| (r.joints.clone(), r.kind))
+    }
+
+    #[test]
+    fn meshy_like_glb_spawns() {
+        let mut app = app();
+        let scene = load(&mut app, "model.glb");
+        app.world_mut().spawn(SceneRoot(scene));
+        let spawned = run_until(&mut app, |w| w.query::<&Mesh3d>().iter(w).count() > 0);
+        assert!(spawned, "the GLB scene never spawned a mesh");
+    }
+
+    /// A static mosquito model becomes a skinned mesh whose wings beat.
+    #[test]
+    fn ephemera_model_is_rigged_and_flaps() {
+        let mut app = app();
+        let scene = load(&mut app, "mosquito.glb");
+        let models = Models::default().with(ModelKind::Ephemera, scene);
+        app.insert_resource(models);
+        let creature = app
+            .world_mut()
+            .spawn((
+                Swappable::new(ModelKind::Ephemera),
+                Flap {
+                    intensity: 0.8,
+                    phase: 0.4,
+                },
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        let rigged = run_until(&mut app, |w| w.query::<&Rig>().iter(w).count() > 0);
+        assert!(rigged, "the model was never rigged");
+
+        let (joints, kind) = {
+            let w = app.world_mut();
+            let r = w.query::<&Rig>().single(w).unwrap();
+            (r.joints.clone(), r.kind)
+        };
+        assert_eq!(kind, RigKind::Wings);
+        assert_eq!(joints.len(), crate::rig::wing::COUNT);
+        // The mesh is skinned to those joints, with weights on every vertex.
+        let w = app.world_mut();
+        let (skin, mesh) = w
+            .query::<(&SkinnedMesh, &Mesh3d)>()
+            .single(w)
+            .expect("one skinned mesh");
+        assert_eq!(skin.joints, joints);
+        let mesh = w.resource::<Assets<Mesh>>().get(&mesh.0).unwrap();
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT).is_some());
+
+        // Wings beat as the flap's phase turns.
+        let wing = joints[crate::rig::wing::WING_L];
+        app.update();
+        let a = app.world().get::<Transform>(wing).unwrap().rotation;
+        app.world_mut().get_mut::<Flap>(creature).unwrap().phase = 2.0;
+        app.update();
+        let b = app.world().get::<Transform>(wing).unwrap().rotation;
+        assert!(a.angle_between(b) > 0.2, "the wing didn't move ({a} → {b})");
+    }
+
+    /// A static T-posed model becomes a skinned humanoid that walks.
+    #[test]
+    fn judith_model_is_rigged_and_walks() {
+        let mut app = app();
+        let scene = load(&mut app, "humanoid.glb");
+        app.insert_resource(Models::default().with(ModelKind::Judith, scene));
+        let judith = app
+            .world_mut()
+            .spawn((
+                Swappable::new(ModelKind::Judith),
+                Gait::default(),
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        let rigged = run_until(&mut app, |w| w.query::<&Rig>().iter(w).count() > 0);
+        assert!(rigged, "the model was never rigged");
+        let (joints, kind) = rig_of(app.world_mut()).unwrap();
+        assert_eq!(kind, RigKind::Humanoid);
+        let knee = joints[crate::rig::human::KNEE[0]];
+        let hip = joints[crate::rig::human::HIP[0]];
+
+        // Standing still, then walking: the legs swing.
+        for _ in 0..10 {
+            app.update();
+        }
+        let still = app.world().get::<Transform>(hip).unwrap().rotation;
+        let mut swing: f32 = 0.0;
+        for k in 0..60 {
+            app.world_mut()
+                .get_mut::<Transform>(judith)
+                .unwrap()
+                .translation
+                .z -= 0.06;
+            app.update();
+            let _ = k;
+            let r = app.world().get::<Transform>(hip).unwrap().rotation;
+            swing = swing.max(still.angle_between(r));
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(swing > 0.2, "walking didn't swing the hip ({swing})");
+        let bent = app.world().get::<Transform>(knee).unwrap().rotation;
+        assert_ne!(bent, Quat::IDENTITY);
     }
 }

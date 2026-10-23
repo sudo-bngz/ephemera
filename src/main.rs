@@ -26,6 +26,7 @@ mod hud;
 mod input;
 mod models;
 mod racing;
+mod rig;
 mod sky;
 mod state;
 mod taming;
@@ -65,6 +66,7 @@ impl Plugin for GamePlugin {
             )
                 .chain(),
         )
+        // The engine of the world…
         .add_plugins((
             state::StatePlugin,
             input::InputPlugin,
@@ -73,9 +75,13 @@ impl Plugin for GamePlugin {
             sky::SkyPlugin,
             art::ArtPlugin,
             audio::SoundPlugin,
+            rig::RigPlugin,
             creature::CreaturePlugin,
             camera::CameraPlugin,
             hud::HudPlugin,
+        ))
+        // …and the phases of the rite.
+        .add_plugins((
             title::TitlePlugin,
             capture::CapturePlugin,
             taming::TamingPlugin,
@@ -132,6 +138,7 @@ mod smoke {
         .init_asset::<StandardMaterial>()
         .init_asset::<Image>()
         .init_asset::<AudioSource>()
+        .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )))
@@ -506,6 +513,62 @@ mod smoke {
             .iter(app.world())
             .count();
         assert_eq!(after, before + 1, "the gate chime didn't play");
+    }
+
+    /// Judith walks (her limbs swing) and crouches on foot; in the race
+    /// every Ephemera carries a rider who leans into the bank.
+    #[test]
+    fn figures_move() {
+        use crate::rig::{Gait, Rig, human};
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<NextState<GamePhase>>()
+            .set(GamePhase::Capture);
+        tick(&mut app, 3);
+        let judith = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::components::Judith>>()
+            .single(app.world())
+            .unwrap();
+        let hip = app.world().get::<Rig>(judith).unwrap().joints[human::HIP[0]];
+        let rest = app.world().get::<Transform>(hip).unwrap().rotation;
+        press(&mut app, KeyCode::KeyW);
+        let mut swing: f32 = 0.0;
+        for _ in 0..90 {
+            app.update();
+            let r = app.world().get::<Transform>(hip).unwrap().rotation;
+            swing = swing.max(rest.angle_between(r));
+        }
+        assert!(swing > 0.25, "Judith's legs didn't swing walking ({swing})");
+        // Crouching drops her hips.
+        let hips = app.world().get::<Rig>(judith).unwrap().joints[human::HIPS];
+        let standing = app.world().get::<Transform>(hips).unwrap().translation.y;
+        press(&mut app, KeyCode::KeyC);
+        tick(&mut app, 60);
+        let low = app.world().get::<Transform>(hips).unwrap().translation.y;
+        assert!(
+            low < standing - 0.15,
+            "crouching didn't lower her ({standing} → {low})"
+        );
+        release(&mut app, KeyCode::KeyC);
+        release(&mut app, KeyCode::KeyW);
+
+        // The race: four Ephemera, four riders, all seated (ride pose).
+        app.world_mut()
+            .resource_mut::<NextState<GamePhase>>()
+            .set(GamePhase::Racing);
+        tick(&mut app, 60);
+        let riders: Vec<f32> = app
+            .world_mut()
+            .query::<(&Gait, &ChildOf)>()
+            .iter(app.world())
+            .map(|(g, _)| g.pose.drop)
+            .collect();
+        assert_eq!(riders.len(), 4, "riders: {}", riders.len());
+        assert!(
+            riders.iter().all(|d| *d > 0.15),
+            "riders not seated: {riders:?}"
+        );
     }
 
     /// N draws a new world in place.

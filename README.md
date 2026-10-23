@@ -101,6 +101,7 @@ src/
 ├── sky.rs         Sky dome, sun, clouds, distant mesas, per-mood fog palette
 ├── models.rs      Optional GLB overrides (meshy.ai etc.) swapped in for placeholders
 ├── creature.rs    The Ephemera built from primitives; wing/leg/body animation
+├── rig.rs         Rigs static models at load (wings, humanoid); poses; walk/crouch/ride
 ├── camera.rs      Chase camera: lag, speed-FOV, roll, shake
 ├── hud.rs         One persistent HUD; phases write into the `Hud` resource
 ├── title.rs       Title screen
@@ -166,6 +167,19 @@ cached as WAV:
 [`assets/alea/README.md`](assets/alea/README.md) has the conventions, and the two
 things alea does to every sound that a game has to work around.
 
+### Animation
+
+Everything moves. The Ephemera beats its wings in a figure-eight, tucks its
+legs at speed and bobs. Judith walks, creeps when crouched, rides astride and
+leans into the bank. The rivals carry riders of their own. The procedural
+placeholders have jointed limbs, and models loaded from `assets/models/` are
+**rigged by the game at load** (`rig.rs`): it reads the mesh's shape, places a
+skeleton, weights each vertex to the bones by position, and skins the mesh on
+the GPU. One pose system drives both. Around them, wind gusts roll across the
+reed beds, the water moves in waves that repeat exactly every chunk, mushroom
+caps breathe, gills and crystals throb, spores wander, moths circle and gate
+flags snap.
+
 ## Custom 3D models (meshy.ai)
 
 Everything is built from primitives, but any of the creature, Judith, reeds, gates and
@@ -195,7 +209,6 @@ run.
 ## Roadmap
 
 - Gamepad support — `InputAxes` is already the single point to extend.
-- Rigged wings for a custom Ephemera model.
 - Audio ducking and a mixer; HRTF for the hums.
 - Ghost replay of your best lap; tribe leaderboard.
 - A fourth phase: the naming ceremony.

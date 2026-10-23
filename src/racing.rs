@@ -163,6 +163,19 @@ struct Ai {
     lookahead: usize,
 }
 
+/// Gate flags snapping in the wind (the value is a phase).
+#[derive(Component)]
+struct Flutter(f32);
+
+fn flutter(time: Res<Time>, mut q: Query<(&Flutter, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (f, mut tf) in &mut q {
+        let a = (t * 7.0 + f.0).sin() * 0.35 + (t * 13.0 + f.0 * 2.0).sin() * 0.12;
+        tf.rotation =
+            Quat::from_rotation_y(a) * Quat::from_rotation_x(0.08 * (t * 5.0 + f.0).sin());
+    }
+}
+
 #[derive(Component)]
 struct Gate {
     index: usize,
@@ -185,6 +198,11 @@ pub(crate) struct Race {
 }
 
 impl Rider {
+    /// Bank angle, radians.
+    pub(crate) fn roll(&self) -> f32 {
+        self.roll
+    }
+
     /// Speed over top speed, 0–1 (over 1 when boosting).
     pub(crate) fn speed_fraction(&self) -> f32 {
         (self.speed / self.top_speed).max(0.0)
@@ -320,6 +338,7 @@ fn setup(
                         Mesh3d(flag.clone()),
                         MeshMaterial3d(gate_idle.clone()),
                         Transform::from_xyz(s * (GATE_RADIUS + 0.2), GATE_HEIGHT - 1.4, 0.0),
+                        Flutter(i as f32 * 1.3 + s),
                         NotShadowCaster,
                     ));
                 }
@@ -352,10 +371,10 @@ fn setup(
     );
     commands.entity(player).insert(Racer::new("Judith"));
 
-    // Rivals.
+    // Rivals, each with a rider of the tribe in the saddle.
     for (i, (name, skill, coat)) in RIVALS.iter().enumerate() {
         let slot = [0.5, 1.5, -1.5][i];
-        spawn_ephemera(
+        let rival = spawn_ephemera(
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -390,6 +409,10 @@ fn setup(
                 Racer::new(name),
             ),
         );
+        let cloth = coat.glow.mix(&Color::srgb(0.3, 0.25, 0.2), 0.5);
+        let rider =
+            crate::components::spawn_rider(&mut commands, &mut meshes, &mut materials, cloth);
+        mount(&mut commands, rider, rival);
     }
 
     spawn_speed_lines(&mut commands, &mut meshes, &mut materials, &mut rng);
@@ -473,12 +496,19 @@ pub(crate) fn spawn_player_rider(
     );
     // Judith in the saddle.
     let saddle = crate::components::spawn_judith(commands, meshes, materials, Vec3::ZERO);
-    commands
-        .entity(saddle)
-        .remove::<Velocity>()
-        .insert(Transform::from_xyz(0.0, 0.55, -0.6).with_scale(Vec3::splat(0.9)))
-        .insert(ChildOf(player));
+    mount(commands, saddle, player);
     player
+}
+
+/// Seats a figure on an Ephemera. The riding pose drops the hips by about
+/// a quarter of the height, so the figure's feet-level origin sits below
+/// the saddle and its pelvis lands on it.
+pub(crate) fn mount(commands: &mut Commands, rider: Entity, ephemera: Entity) {
+    commands
+        .entity(rider)
+        .remove::<Velocity>()
+        .insert(Transform::from_xyz(0.0, 0.1, -0.5).with_scale(Vec3::splat(0.9)))
+        .insert(ChildOf(ephemera));
 }
 
 /// Thin streaks positioned relative to the camera every frame.
@@ -1200,6 +1230,7 @@ impl Plugin for RacingPlugin {
                     speed_lines
                         .run_if(in_state(GamePhase::Racing).or(in_state(GamePhase::Explore))),
                     highlight_gates.run_if(in_state(GamePhase::Racing)),
+                    flutter.run_if(in_state(GamePhase::Racing)),
                 )
                     .after(crate::camera::follow)
                     .in_set(crate::GameSet::Camera),

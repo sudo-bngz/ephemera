@@ -82,14 +82,34 @@ cargo run --release --manifest-path tools/meshy-gen/Cargo.toml
 > **mesa**: weathered alien rock spire, layered sediment, flat top, stylized,
 > low-poly
 
-### Things to know
+### Animation: the game rigs the models itself
 
-- **Wing animation**: the placeholder creature flaps its wings procedurally.
-  A Meshy model is a single static mesh, so the swapped Ephemera keeps its
-  flight motion (banking, bobbing, pitching) but its wings won't beat. Meshy's
-  auto-rigging targets humanoids and quadrupeds, not insects. Rigging the
-  wings in Blender would restore the flapping. Judith is humanoid, so
-  Meshy's rigging and animation clips do work for her.
+A Meshy model is one static mesh, and Meshy only rigs humanoids and
+quadrupeds. So when `ephemera.glb` or `judith.glb` loads, the game rigs it:
+it reads the mesh's shape, places a skeleton, weights every vertex to the
+bones by where it sits, and turns it into a GPU-skinned mesh. The terminal
+says `rigged Ephemera model: 7 bones, … vertices`.
+
+- **The Ephemera**: the wide, thin parts above the body's middle are the
+  wings (they beat, in a figure-eight); the parts hanging below are the legs
+  (they dangle at rest and tuck back in flight); the abdomen bobs, the head
+  looks around.
+- **Judith** (and the riders): in a T-pose (which is why the prompt asks for
+  one) her arms stand clear of the body, so arms, legs, head and spine are
+  found reliably. She walks, crouches, rides astride, leans into the bank.
+
+If the wings are cut in the wrong place, tune the Ephemera's line in
+`models.cfg` (fractions of the model's size):
+
+```text
+ephemera  scale=6.0  yaw=180  y=-1.0  wing_hinge=0.2  wing_min_y=0.45  leg_max_y=0.3
+```
+
+- `wing_hinge`: where the wings start, as a fraction of the half wingspan
+  from the centre line. Raise it if part of the body flaps; lower it if the
+  wing roots stay still.
+- `wing_min_y`: wings are above this fraction of the height.
+- `leg_max_y`: legs are below this fraction of the height.
 - **Gate highlight**: the "next gate" glow recolours the placeholder meshes,
   so a custom `gate.glb` won't light up. Something to wire up next.
 - **Licence**: on Meshy's free plan, models are CC BY 4.0, so commercial use

@@ -32,6 +32,8 @@ const GRID: usize = 32;
 const TEXELS: usize = 96;
 /// Chunk builds in flight at once.
 const IN_FLIGHT: usize = 6;
+/// Water mesh vertices per side.
+const WATER_GRID: usize = 24;
 /// Chunks kept around the focus (radius, in chunks).
 const VIEW_RADIUS: i32 = 4;
 
@@ -159,8 +161,26 @@ struct Floater {
 
 #[derive(Component)]
 pub struct Spore {
-    base_y: f32,
+    base: Vec3,
     phase: f32,
+}
+
+/// Swells and settles: mushroom caps and their gills.
+#[derive(Component)]
+struct Breathe {
+    base: Vec3,
+    phase: f32,
+    amount: f32,
+}
+
+/// A swarm of glowing moths circling a point.
+#[derive(Component)]
+struct Moth {
+    phase: f32,
+    radius: f32,
+    speed: f32,
+    height: f32,
+    centre: Vec3,
 }
 
 /// Shared meshes & materials, created once.
@@ -188,6 +208,8 @@ pub struct WetlandAssets {
     orb_mesh: Handle<Mesh>,
     veil_mesh: Handle<Mesh>,
     sigil_mesh: Handle<Mesh>,
+    moth_mesh: Handle<Mesh>,
+    moth_mat: Handle<StandardMaterial>,
 }
 
 /// A clump of reeds as one mesh (unit radius, unit height), so a clump is a
@@ -212,6 +234,27 @@ fn reed_clump_mesh(seed: u64) -> Mesh {
         }
     }
     out.unwrap()
+}
+
+/// A moth: two triangular wings meeting at the body line (x = 0), so
+/// scaling x folds them.
+fn moth_mesh() -> Mesh {
+    let positions: Vec<[f32; 3]> = vec![
+        [0.0, 0.0, -0.12],
+        [0.0, 0.0, 0.1],
+        [0.22, 0.02, 0.04],
+        [0.0, 0.0, -0.12],
+        [0.0, 0.0, 0.1],
+        [-0.22, 0.02, 0.04],
+    ];
+    let normals = vec![[0.0, 1.0, 0.0]; 6];
+    Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(bevy::mesh::Indices::U16(vec![0, 1, 2, 3, 5, 4]))
 }
 
 /// A bone rib: a half-ring in the XY plane, radius 1, feet at x = ±1.
@@ -268,7 +311,14 @@ fn setup_assets(
             perceptual_roughness: 0.95,
             ..default()
         }),
-        water_mesh: meshes.add(Plane3d::default().mesh().size(CHUNK, CHUNK)),
+        // Subdivided: `animate_water` moves its vertices in waves that
+        // repeat every chunk, so every water chunk shares this one mesh.
+        water_mesh: meshes.add(
+            Plane3d::default()
+                .mesh()
+                .size(CHUNK, CHUNK)
+                .subdivisions(WATER_GRID as u32 - 1),
+        ),
         water_mat: materials.add(StandardMaterial {
             base_color: Color::srgba(0.10, 0.42, 0.48, 0.78),
             emissive: LinearRgba::new(0.02, 0.16, 0.18, 1.0),
@@ -318,6 +368,15 @@ fn setup_assets(
         orb_mesh: meshes.add(Sphere::new(1.0).mesh().uv(32, 16)),
         veil_mesh: meshes.add(Rectangle::new(1.0, 1.0)),
         sigil_mesh: meshes.add(Circle::new(1.0).mesh().resolution(48)),
+        moth_mesh: meshes.add(moth_mesh()),
+        moth_mat: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.9, 0.7),
+            emissive: LinearRgba::rgb(4.0, 3.2, 1.6),
+            double_sided: true,
+            cull_mode: None,
+            unlit: true,
+            ..default()
+        }),
     });
 }
 
@@ -626,7 +685,7 @@ fn spawn_chunk(
             commands
                 .spawn((
                     Spore {
-                        base_y: h.max(SEA_LEVEL) + rng.gen_range(1.0..6.0),
+                        base: local(l, h.max(SEA_LEVEL) + rng.gen_range(1.0..6.0)),
                         phase: rng.gen_range(0.0..std::f32::consts::TAU),
                     },
                     Mesh3d(a.spore_mesh.clone()),
@@ -636,6 +695,36 @@ fn spawn_chunk(
                 ))
                 .id(),
         );
+    }
+
+    // Moths over the wet and the strange lands, at dusk most of all.
+    let swarms = match centre_biome {
+        Props::Marsh | Props::Fungal | Props::Monoliths => rng.gen_range(0..3),
+        _ => 0,
+    };
+    for _ in 0..swarms {
+        let (l, _, h) = spot(&mut rng);
+        let centre = local(l, h.max(SEA_LEVEL) + rng.gen_range(2.0..6.0));
+        for _ in 0..rng.gen_range(6..14) {
+            kids.push(
+                commands
+                    .spawn((
+                        Moth {
+                            phase: rng.gen_range(0.0..std::f32::consts::TAU),
+                            radius: rng.gen_range(1.0..4.5),
+                            speed: rng.gen_range(0.6..1.6)
+                                * if rng.gen_bool(0.5) { 1.0 } else { -1.0 },
+                            height: rng.gen_range(-1.0..1.5),
+                            centre,
+                        },
+                        Mesh3d(a.moth_mesh.clone()),
+                        MeshMaterial3d(a.moth_mat.clone()),
+                        Transform::from_translation(centre).with_scale(Vec3::splat(1.6)),
+                        NotShadowCaster,
+                    ))
+                    .id(),
+            );
+        }
     }
 
     // --- biome features ------------------------------------------------------
@@ -668,14 +757,17 @@ fn spawn_chunk(
                             Transform::from_xyz(0.0, stalk_h * 0.5, 0.0)
                                 .with_scale(Vec3::new(stalk_r, stalk_h, stalk_r)),
                         ));
+                        let breath = rng.gen_range(0.0..std::f32::consts::TAU);
+                        let cap_scale = Vec3::new(cap_r, cap_r * 0.38, cap_r);
                         p.spawn((
                             Mesh3d(a.cap_mesh.clone()),
                             MeshMaterial3d(cap),
-                            Transform::from_xyz(0.0, stalk_h, 0.0).with_scale(Vec3::new(
-                                cap_r,
-                                cap_r * 0.38,
-                                cap_r,
-                            )),
+                            Transform::from_xyz(0.0, stalk_h, 0.0).with_scale(cap_scale),
+                            Breathe {
+                                base: cap_scale,
+                                phase: breath,
+                                amount: 0.06,
+                            },
                             Obstacle {
                                 radius: cap_r,
                                 below: cap_r * 0.2,
@@ -688,6 +780,11 @@ fn spawn_chunk(
                             MeshMaterial3d(a.gill_mat.clone()),
                             Transform::from_xyz(0.0, stalk_h - cap_r * 0.06, 0.0)
                                 .with_scale(Vec3::new(cap_r * 0.92, cap_r * 0.12, cap_r * 0.92)),
+                            Breathe {
+                                base: Vec3::new(cap_r * 0.92, cap_r * 0.12, cap_r * 0.92),
+                                phase: breath,
+                                amount: 0.08,
+                            },
                             NotShadowCaster,
                         ));
                     })
@@ -1173,11 +1270,115 @@ fn stream_chunks(
     }
 }
 
+/// Spores wander on slow loops and twinkle.
 fn drift_spores(time: Res<Time>, mut q: Query<(&Spore, &mut Transform)>) {
     let t = time.elapsed_secs();
     for (s, mut tf) in &mut q {
-        tf.translation.y = s.base_y + (t * 0.7 + s.phase).sin() * 0.6;
+        let a = t * 0.25 + s.phase;
+        tf.translation = s.base
+            + Vec3::new(
+                a.cos() * 1.6 + (a * 2.3).sin() * 0.4,
+                (t * 0.7 + s.phase).sin() * 0.6,
+                a.sin() * 1.2,
+            );
+        tf.scale = Vec3::splat(0.75 + 0.45 * ((t * 3.0 + s.phase * 5.0).sin() * 0.5 + 0.5));
     }
+}
+
+/// Moths circle their swarm's centre on wobbling loops, wings beating.
+fn fly_moths(time: Res<Time>, mut q: Query<(&Moth, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (m, mut tf) in &mut q {
+        let a = t * m.speed + m.phase;
+        let r = m.radius * (1.0 + 0.25 * (t * 0.9 + m.phase).sin());
+        let p = m.centre
+            + Vec3::new(
+                a.cos() * r,
+                m.height + 0.6 * (t * 1.7 + m.phase).sin(),
+                a.sin() * r,
+            );
+        let ahead = Vec3::new(-a.sin(), 0.0, a.cos()) * m.speed.signum();
+        tf.translation = p;
+        tf.look_to(ahead, Vec3::Y);
+        let beat = (t * 22.0 + m.phase * 7.0).sin().abs();
+        tf.scale = Vec3::new(1.6 * (0.25 + 0.75 * beat), 1.6, 1.6);
+    }
+}
+
+fn breathe(time: Res<Time>, mut q: Query<(&Breathe, &mut Transform)>) {
+    let t = time.elapsed_secs();
+    for (b, mut tf) in &mut q {
+        let s = (t * 0.6 + b.phase).sin() * b.amount;
+        tf.scale = b.base * Vec3::new(1.0 + s, 1.0 - s * 0.8, 1.0 + s);
+    }
+}
+
+/// Shared glowing materials pulse: gills, crystals, and the water's sheen.
+fn pulse_materials(
+    time: Res<Time>,
+    a: Res<WetlandAssets>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+) {
+    let t = time.elapsed_secs();
+    if let Some(m) = mats.get_mut(&a.gill_mat) {
+        let k = 2.2 + 1.4 * (t * 0.6).sin();
+        m.emissive = Color::srgb(0.6, 1.0, 0.9).to_linear() * k;
+    }
+    for (i, h) in a.shard_mats.iter().enumerate() {
+        if let Some(m) = mats.get_mut(h) {
+            let c = m.base_color.to_linear();
+            // Slow throb with a sharp glint now and then.
+            let throb = 1.4 + 0.8 * (t * (0.7 + 0.3 * i as f32)).sin();
+            let glint = ((t * 0.37 + i as f32 * 1.7).sin().max(0.0)).powi(24) * 4.0;
+            m.emissive = LinearRgba::rgb(c.red, c.green, c.blue) * (throb + glint);
+        }
+    }
+    if let Some(m) = mats.get_mut(&a.water_mat) {
+        let k = 0.18 + 0.06 * (t * 0.8).sin();
+        m.emissive = LinearRgba::new(0.02 * k * 5.0, k, k * 1.1, 1.0);
+    }
+}
+
+/// Wave height and slope at a point in the water mesh (chunk-local x, z,
+/// centred). Every wave repeats exactly over a chunk, so neighbouring
+/// chunks' water meets seamlessly.
+pub fn water_wave(x: f32, z: f32, t: f32) -> (f32, f32, f32) {
+    let k = std::f32::consts::TAU / CHUNK;
+    let waves = [
+        (3.0, 2.0, 0.07, 0.9),
+        (-2.0, 5.0, 0.05, 1.3),
+        (7.0, -4.0, 0.025, 2.1),
+        (-9.0, -11.0, 0.015, 2.9),
+    ];
+    let (mut h, mut dx, mut dz) = (0.0, 0.0, 0.0);
+    for (nx, nz, amp, w) in waves {
+        let ph = k * (nx * x + nz * z) - w * t;
+        h += amp * ph.sin();
+        dx += amp * k * nx * ph.cos();
+        dz += amp * k * nz * ph.cos();
+    }
+    (h, dx, dz)
+}
+
+fn animate_water(time: Res<Time>, a: Res<WetlandAssets>, mut meshes: ResMut<Assets<Mesh>>) {
+    let t = time.elapsed_secs();
+    let Some(mesh) = meshes.get_mut(&a.water_mesh) else {
+        return;
+    };
+    let Some(bevy::mesh::VertexAttributeValues::Float32x3(ps)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION).cloned()
+    else {
+        return;
+    };
+    let mut positions = Vec::with_capacity(ps.len());
+    let mut normals = Vec::with_capacity(ps.len());
+    for p in ps {
+        let (h, dx, dz) = water_wave(p[0], p[2], t);
+        positions.push([p[0], h, p[2]]);
+        normals.push(Vec3::new(-dx, 1.0, -dz).normalize().to_array());
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 }
 
 fn float_landmarks(time: Res<Time>, mut q: Query<(&Floater, &mut Transform)>) {
@@ -1193,10 +1394,17 @@ fn float_landmarks(time: Res<Time>, mut q: Query<(&Floater, &mut Transform)>) {
 /// Wind plus a damped spring per clump: shoves from passing riders make the
 /// whole bed whip and settle. The clump's origin is at ground level, so
 /// rotating it pivots every stalk around its base.
-fn sway_reeds(time: Res<Time>, mut q: Query<(&mut ReedClump, &mut Transform)>) {
+fn sway_reeds(time: Res<Time>, mut q: Query<(&mut ReedClump, &mut Transform, &GlobalTransform)>) {
     let dt = time.delta_secs().min(1.0 / 20.0);
     let t = time.elapsed_secs();
-    for (mut reed, mut tf) in &mut q {
+    // Gusts: crests of wind rolling across the marsh, visible as waves
+    // running through the reed beds.
+    let wind_dir = Vec2::new(0.8, 0.6);
+    for (mut reed, mut tf, gt) in &mut q {
+        let w = gt.translation().xz();
+        let along = w.dot(wind_dir);
+        let gust = ((along / 38.0 - t * 1.1).sin() * 0.5 + 0.5).powi(4)
+            * (0.6 + 0.4 * (w.dot(Vec2::new(-0.6, 0.8)) / 90.0 + t * 0.2).sin());
         // Tall reeds are stiffer and swing slower.
         let k = if reed.solid { 22.0 } else { 38.0 };
         let c = if reed.solid { 3.0 } else { 4.5 };
@@ -1207,7 +1415,7 @@ fn sway_reeds(time: Res<Time>, mut q: Query<(&mut ReedClump, &mut Transform)>) {
         let wind = Vec2::new(
             (t * 0.9 + reed.phase).sin() * 0.04,
             (t * 0.7 + reed.phase * 1.3).cos() * 0.025,
-        );
+        ) + wind_dir * gust * if reed.solid { 0.14 } else { 0.26 };
         let lean = reed.tilt + wind;
         // The clump's own yaw first, then the lean in world space.
         tf.rotation = Quat::from_rotation_z(-lean.x)
@@ -1227,9 +1435,42 @@ impl Plugin for WorldPlugin {
             .expect("wetland assets need Assets<Mesh> and Assets<StandardMaterial>");
         app.add_systems(
             Update,
-            (drift_spores, sway_reeds, float_landmarks).in_set(crate::GameSet::Simulation),
+            (
+                drift_spores,
+                sway_reeds,
+                float_landmarks,
+                fly_moths,
+                breathe,
+                pulse_materials,
+                animate_water,
+            )
+                .in_set(crate::GameSet::Simulation),
         )
         .add_systems(Update, stream_chunks.in_set(crate::GameSet::Camera));
+    }
+}
+
+#[cfg(test)]
+mod water_tests {
+    use super::*;
+
+    #[test]
+    fn waves_meet_across_chunks() {
+        let h = CHUNK * 0.5;
+        for i in 0..20 {
+            let (z, t) = (i as f32 * 5.3 - 50.0, i as f32 * 0.37);
+            let (a, _, _) = water_wave(-h, z, t);
+            let (b, _, _) = water_wave(h, z, t);
+            assert!((a - b).abs() < 1e-4, "seam along x at z={z}: {a} vs {b}");
+            let (c, _, _) = water_wave(z, -h, t);
+            let (d, _, _) = water_wave(z, h, t);
+            assert!((c - d).abs() < 1e-4, "seam along z at x={z}");
+        }
+        assert_ne!(
+            water_wave(3.0, 4.0, 0.0).0,
+            water_wave(3.0, 4.0, 1.0).0,
+            "waves move"
+        );
     }
 }
 
