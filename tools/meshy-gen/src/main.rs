@@ -287,7 +287,13 @@ impl Api {
     fn find_action(&self, name: &str) -> Result<(u64, String), String> {
         // `#123`: that action, as listed in Meshy's library.
         if let Some(id) = name.strip_prefix('#').and_then(|n| n.trim().parse::<u64>().ok()) {
-            return Ok((id, format!("action #{id}")));
+            let found = self
+                .get(&format!("/openapi/v1/animations/library?action_ids={id}"))
+                .ok()
+                .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+                .and_then(|it| it["name"].as_str().map(str::to_string))
+                .unwrap_or_else(|| format!("action #{id}"));
+            return Ok((id, found));
         }
         // The library is a bare array (no pages); `search` matches names
         // and keys. Search on the first word so "crouch walk" finds
@@ -310,18 +316,23 @@ impl Api {
                 v.to_string().chars().take(200).collect::<String>()
             ));
         }
-        let wanted = name.to_ascii_lowercase();
-        // Every word asked for must appear; the shortest such name wins,
-        // an exact match first.
-        let words: Vec<String> = wanted.split_whitespace().map(str::to_string).collect();
+        // Library names are slugs (`Casual_Walk`, `Run_02`): compare with
+        // underscores for spaces. An exact name or key first; else every
+        // word asked for must appear, and the shortest such name wins.
+        let wanted = name.to_ascii_lowercase().replace(' ', "_");
+        let words: Vec<String> = wanted
+            .split('_')
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect();
         let mut best: Option<(usize, u64, String)> = None;
         for it in &items {
             let n = it["name"].as_str().unwrap_or("");
             let Some(id) = it["action_id"].as_u64() else {
                 continue;
             };
-            let ln = n.to_ascii_lowercase();
-            let lk = it["key"].as_str().unwrap_or("").to_ascii_lowercase().replace('_', " ");
+            let ln = n.to_ascii_lowercase().replace(' ', "_");
+            let lk = it["key"].as_str().unwrap_or("").to_ascii_lowercase().replace(' ', "_");
             // Clips that come with a prop (a horse under a riding clip, a
             // chair under a sitting one) are skipped unless asked for.
             let sub = it["sub_category"].as_str().unwrap_or("").to_ascii_lowercase();
@@ -577,7 +588,8 @@ fn animate(
         None => {
             let mut ids = Vec::new();
             for a in &spec.animate {
-                let (id, found) = api.find_action(a)?;
+                let (_, what) = split_label(a);
+                let (id, found) = api.find_action(what)?;
                 println!("  {name:<10} animation `{a}` → #{id} \"{found}\"");
                 if !ids.contains(&id) {
                     ids.push(id);
@@ -603,6 +615,24 @@ fn animate(
         let _ = fs::copy(&path, &still);
     }
     let bytes = api.download(url, &path)?;
+    // Name the clips for what they are to the game (`walk=#30` → "walk";
+    // else the library's name), in the order the actions were asked for.
+    let mut named: Vec<(u64, String)> = Vec::new();
+    for a in &spec.animate {
+        let (label, what) = split_label(a);
+        if let Ok((id, found)) = api.find_action(what)
+            && !named.iter().any(|(i, _)| *i == id) {
+                named.push((id, label.map(str::to_string).unwrap_or(found)));
+            }
+    }
+    let names: Vec<String> = named.into_iter().map(|(_, n)| n).collect();
+    match rename_clips(&path, &names) {
+        Ok(true) => println!("  {name:<10} clips named: {}", names.join(", ")),
+        Ok(false) => println!(
+            "  {name:<10} kept Meshy's clip names (it sent a different number of clips)"
+        ),
+        Err(e) => eprintln!("  {name:<10} couldn't name the clips: {e}"),
+    }
     println!(
         "  {name:<10} ✓ rigged + {} clip(s): {} ({:.1} MB)",
         spec.animate.len(),
@@ -614,6 +644,49 @@ fn animate(
     l.clear(name);
     l.set(name, "rig", &rig);
     Ok(())
+}
+
+/// `walk=#30` → (Some("walk"), "#30"); `idle` → (None, "idle").
+fn split_label(entry: &str) -> (Option<&str>, &str) {
+    match entry.split_once('=') {
+        Some((l, w)) if !l.trim().is_empty() => (Some(l.trim()), w.trim()),
+        _ => (None, entry.trim()),
+    }
+}
+
+/// Renames a GLB's animations in order. `Ok(false)` if the counts differ.
+fn rename_clips(path: &Path, names: &[String]) -> Result<bool, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
+        return Err("not a GLB".into());
+    }
+    let len = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    let json = bytes.get(20..20 + len).ok_or("truncated GLB")?;
+    let mut v: Value = serde_json::from_slice(json).map_err(|e| e.to_string())?;
+    let Some(anims) = v["animations"].as_array_mut() else {
+        return Ok(false);
+    };
+    if anims.len() != names.len() {
+        return Ok(false);
+    }
+    for (a, n) in anims.iter_mut().zip(names) {
+        a["name"] = json!(n);
+    }
+    let mut js = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
+    while js.len() % 4 != 0 {
+        js.push(b' ');
+    }
+    let rest = &bytes[20 + len..];
+    let total = 12 + 8 + js.len() + rest.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&bytes[0..8]);
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(js.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&js);
+    out.extend_from_slice(rest);
+    fs::write(path, out).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -930,6 +1003,13 @@ mod tests {
         let b = dir.join("b.glb");
         fs::write(&b, glb(r#"{"asset":{"version":"2.0"}}"#)).unwrap();
         assert!(has_animations(&a));
+        assert!(rename_clips(&a, &["walk".to_string()]).unwrap());
+        let b2 = fs::read(&a).unwrap();
+        assert!(String::from_utf8_lossy(&b2).contains("\"walk\""));
+        assert!(has_animations(&a), "still a valid GLB");
+        assert!(!rename_clips(&a, &["a".into(), "b".into()]).unwrap());
+        assert_eq!(split_label("walk=#30"), (Some("walk"), "#30"));
+        assert_eq!(split_label("idle"), (None, "idle"));
         assert!(!has_animations(&b));
         assert!(!has_animations(&dir.join("missing.glb")));
         assert_eq!(base64(b"Man"), "TWFu");

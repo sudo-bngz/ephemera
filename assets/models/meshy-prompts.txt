@@ -11,10 +11,12 @@
 #   polycount  triangle budget after remesh (100–300000)
 #   pose       t-pose / a-pose for characters you may rig later
 #   animate    actions from Meshy's animation library (humanoids only): the
-#              model is rigged and the GLB carries a clip for each; the game
-#              plays them by name (idle, walk, run, crouch, jump, swim, sit).
-#              Clips that come with a prop (horse, chair…) are skipped unless
-#              the name asks for one; `#123` picks a library action by id.
+#              model is rigged and the GLB carries a clip for each. Write
+#              `label=#id`: the id is the library action
+#              (https://docs.meshy.ai/en/api/animation-library, or
+#              `meshy-gen --library WORD`), the label names the clip for the
+#              game: idle, walk, run, crouch, jump, swim, sit (for riding).
+#              A bare name (`idle`) is looked up in the library instead.
 #   height     the character's height in metres, for rigging (1.7)
 #
 # The look: science fiction on an alien moon, not fantasy. The clans live
@@ -40,10 +42,10 @@ texture = iridescent dark violet chitin with oil-slick sheen, glowing teal
 polycount = 15000
 pose = t-pose
 height = 1.7
-# No `sitting`: Meshy's sitting clips can come with a horse or a chair
-# built in. Without a riding clip the game seats her in a held crouch. To
-# choose one yourself: `meshy-gen --library sit`, then add its `#id`.
-animate = idle, walking, running, crouch walk, jump, swimming
+# #0 Idle · #30 Casual_Walk · #14 Run_02 · #341 Walk_Slowly_and_Look_Around
+# (the stalk) · #86 Basic_Jump · #32 Chair_Sit_Idle_F (seated, for riding).
+# The library has no swimming clip.
+animate = idle=#0, walk=#30, run=#14, crouch=#341, jump=#86, sit=#32
 prompt = young woman pilot from an alien colony, lean and athletic, fitted
   layered flight suit of soft technical fabric with ceramic armour plates on
   the shoulders and shins, a slim visor pushed up on her forehead, a compact
@@ -85,7 +87,7 @@ texture = dusty mauve and rose rock layers with faint violet glowing veins
 polycount = 12000
 pose = t-pose
 height = 1.75
-animate = idle, walking, sitting
+animate = idle=#0, walk=#121
 prompt = elder of an alien colony clan, tall and thin, long layered robe of
   technical fabric with a high collar, a ceramic mask-visor hanging at the
   chest, a slim staff that is a scanning instrument, grey hair in a long
@@ -97,7 +99,7 @@ texture = deep teal and bone white fabric, small amber light points on the
 polycount = 12000
 pose = t-pose
 height = 1.7
-animate = idle, walking, sitting
+animate = idle=#11, walk=#30
 prompt = young colonist technician, broad-shouldered, sleeveless utility
   suit, tool harness with small glowing modules, one forearm wrapped in a
   flexible screen, short shaved hair with a light-line tattoo, science
@@ -108,7 +110,7 @@ texture = rust orange and charcoal fabric, glowing cyan modules, brown skin
 polycount = 12000
 pose = t-pose
 height = 1.65
-animate = idle, walking, sitting
+animate = idle=#12, walk=#1
 prompt = alien-born colonist woman in a hooded marsh suit, translucent
   rain cape, breathing filter at the throat, a drone resting on her
   shoulder, science fiction game character, full body
