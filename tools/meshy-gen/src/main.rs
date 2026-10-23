@@ -459,6 +459,14 @@ fn generate(
             id
         }
         None => {
+            // A new model: a rig or animation kept from the previous one
+            // belongs to that model, not this one.
+            {
+                let mut l = ledger.lock().unwrap();
+                l.forget(name, "rig");
+                l.forget(name, "anim");
+            }
+            let _ = fs::remove_file(out_dir.join(format!("{name}.static.glb")));
             let mut body = json!({
                 "mode": "preview",
                 "prompt": spec.prompt,
@@ -588,9 +596,10 @@ fn animate(
         .as_str()
         .filter(|u| !u.is_empty())
         .ok_or("animation succeeded but returned no GLB url")?;
-    // Keep the static model next to the animated one (the first time).
+    // Keep the static model next to the animated one: the fresh one when
+    // this model was just made, else the first one ever kept.
     let still = out_dir.join(format!("{name}.static.glb"));
-    if !still.exists() {
+    if refine.is_some() || !still.exists() {
         let _ = fs::copy(&path, &still);
     }
     let bytes = api.download(url, &path)?;
