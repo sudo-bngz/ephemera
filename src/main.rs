@@ -21,7 +21,9 @@ mod components;
 mod creature;
 mod hud;
 mod input;
+mod models;
 mod racing;
+mod sky;
 mod state;
 mod taming;
 mod title;
@@ -62,7 +64,9 @@ impl Plugin for GamePlugin {
         .add_plugins((
             state::StatePlugin,
             input::InputPlugin,
+            models::ModelsPlugin,
             world::WorldPlugin,
+            sky::SkyPlugin,
             creature::CreaturePlugin,
             camera::CameraPlugin,
             hud::HudPlugin,
@@ -193,6 +197,90 @@ mod smoke {
         if let Projection::Perspective(p) = proj {
             assert!(p.fov.is_finite(), "camera fov: {}", p.fov);
         }
+    }
+
+    /// The screenshot bug: flying full speed into two overlapping tall
+    /// clumps used to wedge the Ephemera in place. It must slide or hop out.
+    #[test]
+    fn never_stuck_between_tall_reeds() {
+        use crate::world::ReedClump;
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<NextState<GamePhase>>()
+            .set(GamePhase::Racing);
+        tick(&mut app, 3);
+        press(&mut app, KeyCode::KeyW);
+        // Countdown, then get up to speed.
+        tick(&mut app, 300);
+
+        let player = app
+            .world_mut()
+            .query_filtered::<(Entity, &Transform), With<crate::components::Ephemera>>()
+            .iter(app.world())
+            .find(|(e, _)| {
+                app.world()
+                    .get::<crate::racing::Racer>(*e)
+                    .is_some_and(|r| r.name == "Judith")
+            })
+            .map(|(e, t)| (e, *t))
+            .expect("player");
+        let (entity, tf) = player;
+        let fwd = tf.forward().as_vec3().with_y(0.0).normalize();
+        let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+        let ahead = tf.translation.with_y(0.0) + fwd * 25.0;
+        // Two tall clumps with a 1 m gap between them, right on the path:
+        // narrower than the Ephemera, wide enough to aim for.
+        for s in [-1.0, 1.0] {
+            app.world_mut().spawn((
+                crate::components::PhaseScoped,
+                ReedClump {
+                    radius: 3.5,
+                    height: 12.0,
+                    solid: true,
+                    tilt: Vec2::ZERO,
+                    tilt_vel: Vec2::ZERO,
+                    phase: 0.0,
+                },
+                Transform::from_translation(ahead + side * s * 4.0),
+                GlobalTransform::from_translation(ahead + side * s * 4.0),
+            ));
+        }
+        // Like a player aiming for the gate behind the reeds: keep steering
+        // at a point on the far side of the clumps.
+        let goal = ahead + fwd * 60.0;
+        let start = tf.translation;
+        let mut held: Option<KeyCode> = None;
+        for _ in 0..300 {
+            let t = *app.world().get::<Transform>(entity).unwrap();
+            let heading = t.forward().as_vec3().with_y(0.0).normalize_or(fwd);
+            let to_goal = (goal - t.translation).with_y(0.0).normalize_or(fwd);
+            // Positive cross.y = goal is to the left.
+            let cross = heading.cross(to_goal).y;
+            let want = if cross > 0.05 {
+                Some(KeyCode::KeyA)
+            } else if cross < -0.05 {
+                Some(KeyCode::KeyD)
+            } else {
+                None
+            };
+            if want != held {
+                if let Some(k) = held {
+                    release(&mut app, k);
+                }
+                if let Some(k) = want {
+                    press(&mut app, k);
+                }
+                held = want;
+            }
+            app.update();
+        }
+        let now = app.world().get::<Transform>(entity).unwrap().translation;
+        // Reaching the goal (or flying past it) means we got through.
+        let progress = (now - start).with_y(0.0).dot(fwd);
+        assert!(
+            progress > 70.0,
+            "stuck at the clumps: only {progress:.1} m of progress in 5 s (now {now:?})"
+        );
     }
 
     #[test]

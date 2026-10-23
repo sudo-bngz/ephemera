@@ -76,7 +76,9 @@ src/
 ├── state.rs       GamePhase, EphemeraStats, RunLog, PhaseScoped cleanup
 ├── input.rs       InputAxes — one sampled input resource for all phases
 ├── components.rs  Shared markers (Judith, Ephemera, Velocity, CameraTarget)
-├── world.rs       Procedural wetlands: mud, pools, reed clumps, spores, lighting, fog
+├── world.rs       Procedural wetlands: mud, pools, swaying reed clumps, spores, lighting
+├── sky.rs         Sky dome, sun, clouds, distant mesas, per-mood fog palette
+├── models.rs      Optional GLB overrides (meshy.ai etc.) swapped in for placeholders
 ├── creature.rs    The Ephemera built from primitives; wing/leg/body animation
 ├── camera.rs      Chase camera: lag, speed-FOV, roll, shake
 ├── hud.rs         One persistent HUD; phases write into the `Hud` resource
@@ -105,22 +107,34 @@ Tuning the feel happens in exactly one place, and the rivals obey the same physi
 - Yaw rate tightens at low speed and opens at high speed; visual roll follows steering.
 - Altitude is soft-clamped; dragging through the mud bleeds speed; skimming low over a
   pool gives a small push.
-- Reed clumps are cylinders: hit one below its height and you're shoved out and lose
-  most of your speed.
+- Short reeds are soft: you plough through with a little drag and they whip aside.
+- Tall reeds are solid but never a wall: you slide along them, lose speed once per
+  impact (more if head-on) and flutter upwards to hop over. Pushes from overlapping
+  clumps are summed, so two clumps can never pin you between them.
 
 ### Speed sensation
 
 - Chase camera sits lower and closer as speed rises; FOV widens by up to 30°.
 - Camera rolls with the bank, shakes on boost, gate pass, collisions and bucking.
 - Speed-line streaks stream past the camera above ~55% of top speed.
-- Reed beds line the racing line so the ground visibly rushes by at low altitude.
+- Reed beds line the racing line so the ground visibly rushes by at low altitude, and
+  bend away as you tear past.
+- Fog tied to a gradient sky dome: distance fades into the horizon colour, so speed
+  reads against a world with depth instead of a flat backdrop.
 - The creature's wing-beat frequency and amplitude scale with speed.
+
+## Custom 3D models (meshy.ai)
+
+Everything is built from primitives, but any of the creature, Judith, reeds, gates and
+horizon rocks can be replaced by dropping a GLB into `assets/models/`. No code change
+needed. See [`assets/models/README.md`](assets/models/README.md) for file names, poly
+budgets, how to fit a model with `models.cfg`, and Meshy prompts written for the game.
 
 ## Roadmap
 
 - Audio (`bevy_audio`): wing drone pitched by speed, gate chimes, marsh ambience.
 - Gamepad support — `InputAxes` is already the single point to extend.
-- Proper meshes/GLTF for Judith and the Ephemera, and a terrain heightfield.
+- Terrain heightfield; rigged wings for a custom Ephemera model.
 - Ghost replay of your best lap; tribe leaderboard.
 - A fourth phase: the naming ceremony.
 

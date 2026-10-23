@@ -122,6 +122,8 @@ pub struct Rider {
     trust: f32,
     buck: f32,
     buck_dir: f32,
+    /// Seconds before another reed impact can cost speed again.
+    bump_cooldown: f32,
 }
 
 #[derive(Component, Default, Debug, Clone, Copy)]
@@ -211,9 +213,11 @@ fn setup(
     stats: Res<EphemeraStats>,
     mut hud: ResMut<Hud>,
 ) {
+    let track = Track::generate(777);
     let cam = spawn_wetlands(
         &mut commands,
         &mut meshes,
+        &mut materials,
         &assets,
         WetlandsConfig {
             seed: 2026,
@@ -224,6 +228,7 @@ fn setup(
             mood: Mood::Noon,
             clearing: 0.0,
         },
+        &track.points,
     );
     commands.entity(cam).insert(ChaseCamera {
         base_fov: 64f32.to_radians(),
@@ -232,7 +237,6 @@ fn setup(
         ..default()
     });
 
-    let track = Track::generate(777);
     let mut rng = StdRng::seed_from_u64(5);
 
     // Line the track with reed beds so the ground reads as rushing past,
@@ -295,6 +299,10 @@ fn setup(
             .spawn((
                 PhaseScoped,
                 Gate { index: i },
+                crate::models::Swappable::sized(
+                    crate::models::ModelKind::Gate,
+                    Vec3::splat(GATE_HEIGHT),
+                ),
                 Transform::from_translation(*g).with_rotation(Quat::from_rotation_y(yaw)),
                 Visibility::default(),
             ))
@@ -355,6 +363,7 @@ fn setup(
                 trust: stats.trust,
                 buck: 0.0,
                 buck_dir: 1.0,
+                bump_cooldown: 0.0,
             },
             Racer::new("Judith"),
         ),
@@ -400,6 +409,7 @@ fn setup(
                     trust: 1.0,
                     buck: 0.0,
                     buck_dir: 1.0,
+                    bump_cooldown: 0.0,
                 },
                 Racer::new(name),
             ),
@@ -538,7 +548,7 @@ fn ai_input(
         let fwd = (target - tf.translation).normalize_or(dir);
         let fwd_side = Vec3::new(-fwd.z, 0.0, fwd.x);
         for (rt, reed) in &reeds {
-            if reed.height < 6.0 {
+            if !reed.solid {
                 continue;
             }
             let rel = rt.translation() - tf.translation;
@@ -594,7 +604,7 @@ fn integrate(
         &mut Flap,
         Option<&Player>,
     )>,
-    reeds: Query<(&GlobalTransform, &ReedClump)>,
+    mut reeds: Query<(&GlobalTransform, &mut ReedClump)>,
     pools: Query<(&GlobalTransform, &Pool)>,
 ) {
     let dt = time.delta_secs().min(1.0 / 30.0);
@@ -684,35 +694,73 @@ fn integrate(
             r.pitch = r.pitch.min(0.0);
         }
 
-        // --- reed collisions --------------------------------------------------------
-        for (rt, reed) in &reeds {
-            let c = rt.translation();
-            let d = (c.xz() - next_pos.xz()).length();
-            if d < reed.radius + 0.8 && next_pos.y < reed.height + 0.5 {
-                let push = (next_pos.xz() - c.xz()).normalize_or(Vec2::X);
-                let out = c.xz() + push * (reed.radius + 1.6);
-                next_pos.x = out.x;
-                next_pos.z = out.y;
-                let hit = (r.speed / r.top_speed).min(1.0);
-                // Lose most of the speed, but never below a crawl, and get
-                // deflected along the clump so nobody can wedge into it.
-                r.speed = (r.speed * 0.45).max(12.0);
-                let away = (-push.x).atan2(-push.y);
-                let mut d_yaw = away - r.yaw;
-                while d_yaw > std::f32::consts::PI {
-                    d_yaw -= std::f32::consts::TAU;
-                }
-                while d_yaw < -std::f32::consts::PI {
-                    d_yaw += std::f32::consts::TAU;
-                }
-                r.yaw += d_yaw * 0.5;
+        // --- reeds -------------------------------------------------------------
+        // Short reeds are soft: you plough through with a touch of drag and
+        // they whip aside. Tall reeds are solid but never a wall: you are
+        // pushed out and *slide* along them, lose speed once per impact in
+        // proportion to how head-on it was, and the creature flutters upwards
+        // to hop over. Pushes from every overlapping clump are summed before
+        // being applied, so two clumps can't trap you by taking turns.
+        let travel = (next_pos - p).xz().normalize_or_zero();
+        let mut push = Vec2::ZERO;
+        let mut lift = 0.0_f32;
+        let mut head_on = 0.0_f32;
+        let mut in_soft = false;
+        for (rt, mut reed) in &mut reeds {
+            let rel = next_pos.xz() - rt.translation().xz();
+            let d = rel.length();
+            let reach = reed.radius + 4.0;
+            if d > reach || next_pos.y > reed.height + 3.0 {
+                continue;
+            }
+            // Bend away from the rider and along its path.
+            if r.speed > 4.0 {
+                let strength = (r.speed / 30.0).min(2.0) * (1.0 - d / reach);
+                let dir = (-rel).normalize_or(travel) * 0.6 + travel * 0.4;
+                reed.shove(dir, strength * 14.0 * dt);
+            }
+            let hit_radius = reed.radius + 1.2;
+            if d >= hit_radius || next_pos.y >= reed.height + 0.5 {
+                continue;
+            }
+            if !reed.solid {
+                in_soft = true;
+                continue;
+            }
+            let n = rel.normalize_or(-travel);
+            let pen = hit_radius - d;
+            push += n * pen;
+            lift = lift.max((pen / 1.2).min(1.0));
+            head_on = head_on.max((-travel.dot(n)).max(0.0));
+        }
+        if in_soft {
+            r.speed *= 1.0 - 0.35 * dt;
+        }
+        if lift > 0.0 {
+            next_pos.x += push.x;
+            next_pos.z += push.y;
+            // Slide: steer the heading towards the clump's tangent.
+            let n = push.normalize_or_zero();
+            let fwd = Vec2::new(forward.x, forward.z);
+            let into = fwd.dot(n);
+            if n != Vec2::ZERO && into < 0.0 {
+                let slide = (fwd - n * into).normalize_or(Vec2::new(-n.y, n.x));
+                let target = (-slide.x).atan2(-slide.y);
+                r.yaw += wrap_angle(target - r.yaw) * (1.0 - (-10.0 * dt).exp());
+            }
+            // Flutter up and over — also the guaranteed way out of any wedge.
+            next_pos.y = (next_pos.y + lift * 9.0 * dt).min(MAX_ALT);
+            if r.bump_cooldown <= 0.0 {
+                r.speed *= 1.0 - (0.10 + 0.30 * head_on);
+                r.bump_cooldown = 0.5;
                 if is_player {
                     if let Ok(mut cam) = cams.single_mut() {
-                        cam.kick(0.3 + 0.6 * hit);
+                        cam.kick(0.12 + 0.45 * head_on * speed_t);
                     }
                 }
             }
         }
+        r.bump_cooldown = (r.bump_cooldown - dt).max(0.0);
 
         vel.0 = (next_pos - p) / dt;
         tf.translation = next_pos;
@@ -732,6 +780,16 @@ fn integrate(
             }
         }
     }
+}
+
+fn wrap_angle(mut a: f32) -> f32 {
+    while a > std::f32::consts::PI {
+        a -= std::f32::consts::TAU;
+    }
+    while a < -std::f32::consts::PI {
+        a += std::f32::consts::TAU;
+    }
+    a
 }
 
 fn gates(
@@ -959,6 +1017,7 @@ fn results_setup(
     let cam = spawn_wetlands(
         &mut commands,
         &mut meshes,
+        &mut materials,
         &assets,
         WetlandsConfig {
             seed: 9,
@@ -969,6 +1028,7 @@ fn results_setup(
             mood: Mood::Dusk,
             clearing: 10.0,
         },
+        &[],
     );
     commands.entity(cam).insert(ChaseCamera {
         orbit: Some(0.15),

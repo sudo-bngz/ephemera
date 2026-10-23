@@ -47,12 +47,27 @@ pub struct WetlandsConfig {
     pub clearing: f32,
 }
 
-/// A reed clump: solid enough to give cover on foot, and a visible
-/// obstacle in flight. Radius is used for both.
+/// A reed clump. Gives cover on foot. In flight, short clumps are soft
+/// (you plough through them and they bend), tall ones are `solid` obstacles
+/// you slide along. Every clump sways in the wind and bends away from
+/// anything that flies past.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ReedClump {
     pub radius: f32,
     pub height: f32,
+    pub solid: bool,
+    /// Current lean (x, z) in radians, and its angular velocity.
+    pub tilt: Vec2,
+    pub tilt_vel: Vec2,
+    /// Wind phase offset.
+    pub phase: f32,
+}
+
+impl ReedClump {
+    /// Push the clump over in a (world xz) direction; `strength` in rad/s.
+    pub fn shove(&mut self, dir: Vec2, strength: f32) {
+        self.tilt_vel += dir.normalize_or_zero() * strength;
+    }
 }
 
 /// A pool of standing water — Judith splashes (noise!) if she crosses it.
@@ -108,22 +123,30 @@ fn setup_assets(
     });
 }
 
-/// Spawns a complete scene (ground, props, light, fog camera config) tagged
+/// Spawns a complete scene (ground, props, sky, light, fogged camera) tagged
 /// `PhaseScoped`. Returns the camera entity.
+///
+/// `corridor` is a polyline (e.g. the race track) along which no *tall* reed
+/// clump is placed at random — the race places its own, deliberate obstacles.
 pub fn spawn_wetlands(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
     assets: &WetlandAssets,
     cfg: WetlandsConfig,
+    corridor: &[Vec3],
 ) -> Entity {
     let mut rng = StdRng::seed_from_u64(cfg.seed);
     let s = cfg.half_size;
+    let palette = crate::sky::SkyPalette::for_mood(cfg.mood);
 
-    // Ground
+    // Ground — much bigger than the play area so it runs into the fog
+    // instead of ending at a visible edge.
+    let ground = (s * 2.4).max(1500.0);
     commands.spawn((
         PhaseScoped,
         Name::new("Mud"),
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(s * 2.4, s * 2.4))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(ground, ground))),
         MeshMaterial3d(assets.mud_mat.clone()),
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
@@ -147,7 +170,10 @@ pub fn spawn_wetlands(
     // Reed clumps — a parent entity with ~10–25 stalks as children.
     for _ in 0..cfg.reed_clumps {
         let p = random_point(&mut rng, s, cfg.clearing);
-        let tall = rng.gen_bool(0.25);
+        let near_corridor = corridor
+            .iter()
+            .any(|c| (c.xz() - p.xz()).length_squared() < 20.0 * 20.0);
+        let tall = rng.gen_bool(0.25) && !near_corridor;
         let radius = rng.gen_range(1.8..4.5);
         let height = if tall {
             rng.gen_range(7.0..12.0)
@@ -173,45 +199,12 @@ pub fn spawn_wetlands(
         ));
     }
 
-    // Lighting by mood.
-    let (sun_color, sun_lux, sun_dir, ambient, fog_color, fog_start, fog_end, clear) =
-        match cfg.mood {
-            Mood::Dusk => (
-                Color::srgb(0.95, 0.55, 0.50),
-                1200.0,
-                Vec3::new(-0.7, -0.25, 0.4),
-                (Color::srgb(0.35, 0.30, 0.55), 160.0),
-                Color::srgba(0.12, 0.08, 0.20, 1.0),
-                18.0,
-                95.0,
-                Color::srgb(0.10, 0.07, 0.18),
-            ),
-            Mood::Dawn => (
-                Color::srgb(1.0, 0.85, 0.75),
-                6000.0,
-                Vec3::new(0.5, -0.5, -0.4),
-                (Color::srgb(0.55, 0.55, 0.70), 300.0),
-                Color::srgba(0.70, 0.62, 0.72, 1.0),
-                40.0,
-                180.0,
-                Color::srgb(0.62, 0.55, 0.68),
-            ),
-            Mood::Noon => (
-                Color::srgb(1.0, 0.97, 0.90),
-                14000.0,
-                Vec3::new(0.3, -0.9, 0.2),
-                (Color::srgb(0.60, 0.70, 0.75), 500.0),
-                Color::srgba(0.55, 0.75, 0.70, 1.0),
-                120.0,
-                520.0,
-                Color::srgb(0.52, 0.74, 0.70),
-            ),
-        };
+    crate::sky::spawn_sky(commands, meshes, materials, &palette, cfg.seed);
 
-    commands.insert_resource(ClearColor(clear));
+    commands.insert_resource(ClearColor(palette.horizon));
     commands.insert_resource(AmbientLight {
-        color: ambient.0,
-        brightness: ambient.1,
+        color: palette.ambient,
+        brightness: palette.ambient_brightness,
         ..default()
     });
 
@@ -219,12 +212,12 @@ pub fn spawn_wetlands(
         PhaseScoped,
         Name::new("Sun"),
         DirectionalLight {
-            color: sun_color,
-            illuminance: sun_lux,
+            color: palette.sun,
+            illuminance: palette.sun_lux,
             shadows_enabled: true,
             ..default()
         },
-        Transform::default().looking_to(sun_dir.normalize(), Vec3::Y),
+        Transform::default().looking_to(palette.sun_dir.normalize(), Vec3::Y),
     ));
 
     commands
@@ -235,18 +228,11 @@ pub fn spawn_wetlands(
             Projection::from(PerspectiveProjection {
                 fov: 62f32.to_radians(),
                 near: 0.1,
-                far: 900.0,
+                far: crate::sky::CAMERA_FAR,
                 ..default()
             }),
             Transform::from_xyz(0.0, 8.0, 16.0).looking_at(Vec3::ZERO, Vec3::Y),
-            DistanceFog {
-                color: fog_color,
-                falloff: FogFalloff::Linear {
-                    start: fog_start,
-                    end: fog_end,
-                },
-                ..default()
-            },
+            palette.fog(),
             crate::camera::ChaseCamera::default(),
         ))
         .id()
@@ -276,8 +262,23 @@ pub fn spawn_reed_clump(
     commands
         .spawn((
             PhaseScoped,
-            ReedClump { radius, height },
+            ReedClump {
+                radius,
+                height,
+                solid: tall,
+                tilt: Vec2::ZERO,
+                tilt_vel: Vec2::ZERO,
+                phase: rng.gen_range(0.0..std::f32::consts::TAU),
+            },
             Name::new("ReedClump"),
+            crate::models::Swappable::sized(
+                if tall {
+                    crate::models::ModelKind::ReedTall
+                } else {
+                    crate::models::ModelKind::Reed
+                },
+                Vec3::new(radius, height, radius),
+            ),
             Transform::from_translation(at),
             Visibility::default(),
         ))
@@ -317,6 +318,30 @@ fn drift_spores(time: Res<Time>, mut q: Query<(&Spore, &mut Transform)>) {
     }
 }
 
+/// Wind plus a damped spring per clump: shoves from passing riders make the
+/// whole bed whip and settle. The clump's origin is at ground level, so
+/// rotating it pivots every stalk around its base.
+fn sway_reeds(time: Res<Time>, mut q: Query<(&mut ReedClump, &mut Transform)>) {
+    let dt = time.delta_secs().min(1.0 / 20.0);
+    let t = time.elapsed_secs();
+    for (mut reed, mut tf) in &mut q {
+        // Tall reeds are stiffer and swing slower.
+        let k = if reed.solid { 22.0 } else { 38.0 };
+        let c = if reed.solid { 3.0 } else { 4.5 };
+        let acc = -k * reed.tilt - c * reed.tilt_vel;
+        let vel = reed.tilt_vel + acc * dt;
+        reed.tilt_vel = vel;
+        reed.tilt = (reed.tilt + vel * dt).clamp_length_max(0.9);
+        let wind = Vec2::new(
+            (t * 0.9 + reed.phase).sin() * 0.04,
+            (t * 0.7 + reed.phase * 1.3).cos() * 0.025,
+        );
+        let lean = reed.tilt + wind;
+        // Leaning towards +x means rotating about -z; towards +z, about +x.
+        tf.rotation = Quat::from_rotation_z(-lean.x) * Quat::from_rotation_x(lean.y);
+    }
+}
+
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
@@ -326,6 +351,9 @@ impl Plugin for WorldPlugin {
         app.world_mut()
             .run_system_once(setup_assets)
             .expect("wetland assets need Assets<Mesh> and Assets<StandardMaterial>");
-        app.add_systems(Update, drift_spores.in_set(crate::GameSet::Simulation));
+        app.add_systems(
+            Update,
+            (drift_spores, sway_reeds).in_set(crate::GameSet::Simulation),
+        );
     }
 }

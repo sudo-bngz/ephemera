@@ -79,6 +79,7 @@ pub fn spawn_judith(
         .spawn((
             Judith,
             PhaseScoped,
+            crate::models::Swappable::new(crate::models::ModelKind::Judith),
             Name::new("Judith"),
             Transform::from_translation(at),
             Visibility::default(),

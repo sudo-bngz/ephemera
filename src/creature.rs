@@ -94,6 +94,7 @@ pub fn spawn_ephemera(
     commands
         .spawn((
             Ephemera,
+            crate::models::Swappable::new(crate::models::ModelKind::Ephemera),
             Flap {
                 intensity: flap_intensity,
                 phase: 0.0,

@@ -72,6 +72,7 @@ fn setup(
     spawn_wetlands(
         &mut commands,
         &mut meshes,
+        &mut materials,
         &assets,
         WetlandsConfig {
             seed: 1984,
@@ -82,6 +83,7 @@ fn setup(
             mood: Mood::Dusk,
             clearing: 0.0,
         },
+        &[],
     );
 
     let judith = spawn_judith(

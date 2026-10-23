@@ -20,6 +20,7 @@ fn setup(
     let cam = spawn_wetlands(
         &mut commands,
         &mut meshes,
+        &mut materials,
         &assets,
         WetlandsConfig {
             seed: 7,
@@ -30,6 +31,7 @@ fn setup(
             mood: Mood::Dusk,
             clearing: 10.0,
         },
+        &[],
     );
     commands.entity(cam).insert(ChaseCamera {
         orbit: Some(0.12),
