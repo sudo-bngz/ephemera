@@ -103,6 +103,35 @@ impl Plugin for StatePlugin {
         ] {
             app.add_systems(OnExit(phase), despawn_phase_scoped);
         }
+        app.add_systems(Startup, skip_from_cli);
+    }
+}
+
+impl EphemeraStats {
+    /// A reasonably tamed mount, used when jumping straight to the race.
+    pub fn quick_race() -> Self {
+        Self {
+            trust: 0.65,
+            hunger: 0.30,
+            speed: 0.55,
+            agility: 0.50,
+            stamina: 0.60,
+        }
+    }
+}
+
+/// `cargo run --release -- --race` (or `--capture`, `--taming`) skips ahead.
+fn skip_from_cli(mut next: ResMut<NextState<GamePhase>>, mut stats: ResMut<EphemeraStats>) {
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--capture" => next.set(GamePhase::Capture),
+            "--taming" => next.set(GamePhase::Taming),
+            "--race" => {
+                *stats = EphemeraStats::quick_race();
+                next.set(GamePhase::Racing);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -120,6 +149,16 @@ fn global_hotkeys(
     mut log: ResMut<RunLog>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    // F1/F2/F3 jump straight to a phase — handy for testing a single one.
+    if keys.just_pressed(KeyCode::F1) {
+        next.set(GamePhase::Capture);
+    } else if keys.just_pressed(KeyCode::F2) {
+        next.set(GamePhase::Taming);
+    } else if keys.just_pressed(KeyCode::F3) {
+        *stats = EphemeraStats::quick_race();
+        next.set(GamePhase::Racing);
+    }
+
     // Escape always backs out to the title; from the title it quits.
     if keys.just_pressed(KeyCode::Escape) {
         if *phase.get() == GamePhase::Title {

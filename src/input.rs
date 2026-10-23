@@ -15,7 +15,7 @@ pub struct InputAxes {
     pub pitch: f32,
     /// Boost (Shift) / sprint while on foot.
     pub boost: bool,
-    /// Crouch while on foot (Ctrl).
+    /// Crouch while on foot (C, or Ctrl — but Ctrl+arrows is a macOS shortcut).
     pub crouch: bool,
     /// Primary action (Space) — throw net, confirm.
     pub action_pressed: bool,
@@ -42,7 +42,9 @@ fn sample(keys: Res<ButtonInput<KeyCode>>, mut axes: ResMut<InputAxes>) {
         ),
         pitch: axis(&[KeyCode::KeyQ], &[KeyCode::KeyE]),
         boost: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        crouch: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
+        crouch: keys.pressed(KeyCode::KeyC)
+            || keys.pressed(KeyCode::ControlLeft)
+            || keys.pressed(KeyCode::ControlRight),
         action_pressed: keys.just_pressed(KeyCode::Space),
         confirm_pressed: keys.just_pressed(KeyCode::Enter)
             || keys.just_pressed(KeyCode::NumpadEnter),

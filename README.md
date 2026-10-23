@@ -24,10 +24,17 @@ controls away from you.
 
 | | |
 |---|---|
-| On foot | `W/S` walk · `A/D` turn · `Ctrl` crouch · `Shift` sprint · `Space` throw net |
+| On foot | `W/S` walk · `A/D` turn · `C` crouch · `Shift` sprint · `Space` throw net |
 | Camp | `1`–`4` pick what to do with the dawn · `Enter` ride to the Gathering |
 | Flight | `W/S` throttle · `A/D` bank · `Q` dive / `E` climb · `Shift` boost |
 | Anywhere | `Enter` confirm · `Esc` back to title / quit |
+| Shortcuts | `F1` stalk · `F2` tether · `F3` race (with a pre-tamed mount) |
+
+Jump straight to a phase from the command line:
+
+```sh
+cargo run --release -- --race     # or --capture, --taming
+```
 
 ## Running on macOS
 

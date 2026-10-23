@@ -52,9 +52,9 @@ fn setup(
                Judith, raised by them but born of no clan, has one season to prove herself:\n\
                find a wild Ephemera, make it hers, and race it at the Gathering."
             .into(),
-        banner: "".into(),
-        footer: "ENTER — begin the rite      ESC — quit\n\
-                 On foot: WASD move · CTRL crouch · SHIFT sprint · SPACE throw net\n\
+        banner: "PRESS ENTER".into(),
+        footer: "ENTER — begin the rite      F3 — skip straight to the race      ESC — quit\n\
+                 On foot: WASD move · C crouch · SHIFT sprint · SPACE throw net\n\
                  In flight: W/S throttle · A/D bank · Q/E dive & climb · SHIFT boost"
             .into(),
         side: "".into(),

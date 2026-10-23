@@ -137,7 +137,7 @@ fn setup(
                Get within reach and throw the net while it is still calm."
             .into(),
         banner: String::new(),
-        footer: "W/S walk · A/D turn · CTRL crouch · SHIFT sprint · SPACE throw net (close range)"
+        footer: "W/S walk · A/D turn · C crouch · SHIFT sprint · SPACE throw net (close range)"
             .into(),
         side: String::new(),
     };
