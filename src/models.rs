@@ -329,3 +329,62 @@ mod tests {
         assert_eq!(fits[2].1.scale, 1.8, "bad number keeps the default");
     }
 }
+
+#[cfg(test)]
+mod gltf_tests {
+    //! Loads and spawns a real GLB (shaped like Meshy's output) through the
+    //! same plugins the game uses, minus the window and the GPU.
+    use bevy::prelude::*;
+    use bevy::render::RenderPlugin;
+    use bevy::render::settings::{RenderCreation, WgpuSettings};
+    use bevy::window::ExitCondition;
+    use bevy::winit::WinitPlugin;
+
+    #[test]
+    fn meshy_like_glb_spawns() {
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<WinitPlugin>()
+                .set(WindowPlugin {
+                    primary_window: None,
+                    exit_condition: ExitCondition::DontExit,
+                    ..default()
+                })
+                .set(RenderPlugin {
+                    render_creation: RenderCreation::Automatic(WgpuSettings {
+                        backends: None,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(AssetPlugin {
+                    file_path: concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures").into(),
+                    ..default()
+                }),
+        );
+        app.finish();
+        app.cleanup();
+        let scene = app
+            .world()
+            .resource::<AssetServer>()
+            .load(GltfAssetLabel::Scene(0).from_asset("model.glb"));
+        let root = app.world_mut().spawn(SceneRoot(scene)).id();
+        let mut spawned = false;
+        for _ in 0..500 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let meshes = app
+                .world_mut()
+                .query_filtered::<Entity, With<Mesh3d>>()
+                .iter(app.world())
+                .count();
+            if meshes > 0 {
+                spawned = true;
+                break;
+            }
+        }
+        assert!(spawned, "the GLB scene never spawned a mesh under {root:?}");
+    }
+}
