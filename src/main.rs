@@ -26,6 +26,7 @@ mod explore;
 mod fauna;
 mod hud;
 mod input;
+mod menu;
 mod models;
 mod onfoot;
 mod racing;
@@ -87,6 +88,7 @@ impl Plugin for GamePlugin {
             creature::CreaturePlugin,
             camera::CameraPlugin,
             hud::HudPlugin,
+            menu::MenuPlugin,
         ))
         // …and the phases of the rite.
         .add_plugins((
@@ -155,7 +157,12 @@ mod smoke {
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )))
-        .add_plugins(GamePlugin);
+        .add_plugins(GamePlugin)
+        // Straight to the action: no story cards or briefings to click away.
+        .insert_resource(crate::menu::UxSettings {
+            briefings: false,
+            intros: false,
+        });
         app
     }
 
@@ -1017,6 +1024,76 @@ mod smoke {
         }
     }
 
+    /// What a player sees: the menu, the story, a briefing that holds the
+    /// game until ENTER, then the game.
+    #[test]
+    fn menu_story_briefing_then_play() {
+        use crate::menu::{Overlay, Ux, UxSettings};
+        let mut app = app();
+        app.insert_resource(UxSettings::default());
+        tick(&mut app, 3);
+        assert_eq!(app.world().resource::<Ux>().overlay, Overlay::Menu);
+        // Gameplay keys do nothing under the menu; ENTER picks the rite.
+        press(&mut app, KeyCode::Enter);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::Enter);
+        assert!(matches!(
+            app.world().resource::<Ux>().overlay,
+            Overlay::Intro { card: 0, .. }
+        ));
+        assert_eq!(phase(&app), GamePhase::Title);
+        // Through the cards.
+        for _ in 0..4 {
+            press(&mut app, KeyCode::Enter);
+            tick(&mut app, 1);
+            release(&mut app, KeyCode::Enter);
+            tick(&mut app, 1);
+        }
+        tick(&mut app, 2);
+        assert_eq!(phase(&app), GamePhase::Capture);
+        assert_eq!(
+            app.world().resource::<Ux>().overlay,
+            Overlay::Briefing(GamePhase::Capture)
+        );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        // Judith doesn't move while the briefing is up.
+        let judith = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::components::Judith>>()
+            .single(app.world())
+            .unwrap();
+        let at = app.world().get::<Transform>(judith).unwrap().translation;
+        press(&mut app, KeyCode::KeyW);
+        tick(&mut app, 30);
+        assert_eq!(
+            app.world().get::<Transform>(judith).unwrap().translation,
+            at
+        );
+        press(&mut app, KeyCode::Enter);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::Enter);
+        assert_eq!(app.world().resource::<Ux>().overlay, Overlay::None);
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        tick(&mut app, 40);
+        assert_ne!(
+            app.world().get::<Transform>(judith).unwrap().translation,
+            at,
+            "can't move after the briefing"
+        );
+        // TAB shows the controls, and hides them again.
+        press(&mut app, KeyCode::Tab);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::Tab);
+        assert!(matches!(
+            app.world().resource::<Ux>().overlay,
+            Overlay::Controls { .. }
+        ));
+        press(&mut app, KeyCode::Tab);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::Tab);
+        assert_eq!(app.world().resource::<Ux>().overlay, Overlay::None);
+    }
+
     /// N draws a new world in place.
     #[test]
     fn new_world_on_demand() {
@@ -1133,7 +1210,8 @@ mod smoke {
             "no AI rider closed a lap (best: lap {best_ai_lap})"
         );
 
-        // Results reachable and ESC returns to the title.
+        // Results reachable; ESC pauses, and the pause menu goes back to
+        // the title.
         app.world_mut()
             .resource_mut::<NextState<GamePhase>>()
             .set(GamePhase::Results);
@@ -1141,7 +1219,27 @@ mod smoke {
         assert_eq!(phase(&app), GamePhase::Results);
         press(&mut app, KeyCode::Escape);
         tick(&mut app, 2);
+        release(&mut app, KeyCode::Escape);
+        assert_eq!(
+            app.world().resource::<crate::menu::Ux>().overlay,
+            crate::menu::Overlay::Pause
+        );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        for _ in 0..3 {
+            press(&mut app, KeyCode::ArrowDown);
+            tick(&mut app, 1);
+            release(&mut app, KeyCode::ArrowDown);
+            tick(&mut app, 1);
+        }
+        press(&mut app, KeyCode::Enter);
+        tick(&mut app, 3);
+        release(&mut app, KeyCode::Enter);
         assert_eq!(phase(&app), GamePhase::Title);
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        assert_eq!(
+            app.world().resource::<crate::menu::Ux>().overlay,
+            crate::menu::Overlay::Menu
+        );
 
         // Leaving the race must not leave any race entity behind.
         let leftovers = app

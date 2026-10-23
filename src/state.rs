@@ -173,11 +173,8 @@ fn despawn_phase_scoped(
 
 fn global_hotkeys(
     keys: Res<ButtonInput<KeyCode>>,
-    phase: Res<State<GamePhase>>,
     mut next: ResMut<NextState<GamePhase>>,
     mut stats: ResMut<EphemeraStats>,
-    mut log: ResMut<RunLog>,
-    mut exit: MessageWriter<AppExit>,
 ) {
     // F1–F4 jump straight to a phase — handy for testing a single one.
     if keys.just_pressed(KeyCode::F1) {
@@ -191,14 +188,5 @@ fn global_hotkeys(
         next.set(GamePhase::Explore);
     }
 
-    // Escape always backs out to the title; from the title it quits.
-    if keys.just_pressed(KeyCode::Escape) {
-        if *phase.get() == GamePhase::Title {
-            exit.write(AppExit::Success);
-        } else {
-            *stats = EphemeraStats::default();
-            *log = RunLog::default();
-            next.set(GamePhase::Title);
-        }
-    }
+    // Escape is the pause menu's (menu.rs).
 }

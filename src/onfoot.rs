@@ -367,12 +367,14 @@ fn wrap(mut a: f32) -> f32 {
 /// The mouse is captured while she walks, free otherwise.
 fn cursor(
     walkers: Query<(), With<Walker>>,
+    ux: Res<crate::menu::Ux>,
     mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     let Ok(mut cursor) = windows.single_mut() else {
         return;
     };
-    let on_foot = !walkers.is_empty();
+    // Free for the menus.
+    let on_foot = !walkers.is_empty() && !ux.overlay.blocks();
     let wanted = if on_foot {
         CursorGrabMode::Locked
     } else {

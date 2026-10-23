@@ -17,54 +17,64 @@
 #              the name asks for one; `#123` picks a library action by id.
 #   height     the character's height in metres, for rigging (1.7)
 #
+# The look: science fiction on an alien moon, not fantasy. The clans live
+# tribally, but nothing they make is medieval: grown ceramic, alloy, smoked
+# glass, light. Think Moebius, Dune, Annihilation, Nausicaä's ships — no
+# wood, thatch, stone blocks, torches or bones carved into totems.
+#
 # The reeds are instanced ~450 times in a race: keep them light.
 
 [ephemera]
 polycount = 25000
-prompt = giant alien mosquito used as a riding mount, elongated slender body,
-  long thin jointed legs hanging down, four large translucent veined wings
-  spread flat and horizontal, long thin proboscis pointing forward, big
-  compound eyes, a small woven saddle on the thorax, stylized game asset,
-  clean readable silhouette, facing forward
+prompt = giant alien mosquito-like flying creature used as a riding mount,
+  long segmented slender body, long thin jointed legs hanging down, four
+  large translucent veined wings spread flat, long proboscis pointing
+  forward, large compound eyes, a sleek bio-mechanical saddle harness fused
+  to the thorax with glowing cables, science fiction creature design, clean
+  readable silhouette, facing forward
 texture = iridescent dark violet chitin with oil-slick sheen, glowing teal
-  compound eyes, wings clear and faintly veined, saddle of woven ochre reed
+  compound eyes, wings clear and faintly veined, harness of matte white
+  ceramic with thin cyan light lines
 
 [judith]
 polycount = 15000
 pose = t-pose
 height = 1.7
 animate = idle, walking, running, crouch walk, jump, swimming, sitting
-prompt = young woman tribal rider, lean and athletic, wrapped leather clothing,
-  hair tied in a high bun, a hunting net slung across her back, bare
-  forearms, sturdy sandals, stylized game character, full body
-texture = ochre, rust and bone coloured cloth and leather, painted teal marks
-  on the forearms and cheeks, dark brown hair
+prompt = young woman pilot from an alien colony, lean and athletic, fitted
+  layered flight suit of soft technical fabric with ceramic armour plates on
+  the shoulders and shins, a slim visor pushed up on her forehead, a compact
+  capture-net launcher on her back, gloves with light-line seams, sleek
+  boots, science fiction game character, full body
+texture = pale grey and deep indigo fabric, matte white ceramic plates, thin
+  glowing teal seams, long white hair, violet eyes
 
 [reed_tall]
 polycount = 2500
-prompt = clump of tall alien marsh reeds bundled at the base, thin straight
-  stalks of different heights fanning slightly outwards, stylized low poly
-  game asset
-texture = violet and indigo stalks with softly glowing cyan tips
+prompt = clump of tall alien marsh stalks bundled at the base, thin straight
+  translucent stems of different heights fanning outwards, each ending in a
+  small glowing bulb, science fiction alien plant, low poly
+texture = violet and indigo stems, softly glowing cyan bulbs
 
 [reed]
 polycount = 1500
-prompt = small dense clump of short alien marsh grass, stylized low poly
-  game asset
-texture = sage green blades turning lilac at the tips
+prompt = small dense clump of short alien marsh fronds, flat ribbon-like
+  blades curling at the tips, alien plant, low poly
+texture = sage green blades turning lilac and faintly luminous at the tips
 
 [gate]
 polycount = 8000
-prompt = tribal racing gate, two tall carved bone totems joined at the top by
-  a woven arch, feathers and glass beads hanging from the arch, wide open
-  centre, stylized game asset
-texture = weathered bone white, woven ochre reed, glowing turquoise beads
+prompt = racing gate for flying mounts, two tall slender white ceramic pylons
+  joined at the top by a thin floating ring of light, hovering guide drones
+  on each side, wide open centre, science fiction, clean design
+texture = matte pearl white ceramic, brushed graphite joints, glowing cyan
+  light strips
 
 [mesa]
 polycount = 3000
 prompt = weathered alien rock spire with layered sediment bands and a flat
-  top, tall and narrow, stylized low poly
-texture = dusty mauve and rose sandstone layers
+  top, tall and narrow, a few crystalline veins, alien landscape, low poly
+texture = dusty mauve and rose rock layers with faint violet glowing veins
 
 # ---------------------------------------------------------------- people --
 
@@ -73,168 +83,193 @@ polycount = 12000
 pose = t-pose
 height = 1.75
 animate = idle, walking, sitting
-prompt = marsh tribe elder, wiry, wrapped in layered reed-fibre cloth and a
-  long cloak, carved bone jewellery, grey hair in braids, barefoot, stylized
-  game character, full body
-texture = faded indigo and ochre cloth, bone and shell beads, weathered skin
+prompt = elder of an alien colony clan, tall and thin, long layered robe of
+  technical fabric with a high collar, a ceramic mask-visor hanging at the
+  chest, a slim staff that is a scanning instrument, grey hair in a long
+  braid, science fiction game character, full body
+texture = deep teal and bone white fabric, small amber light points on the
+  collar, weathered skin
 
 [villager_2]
 polycount = 12000
 pose = t-pose
 height = 1.7
 animate = idle, walking, sitting
-prompt = young marsh tribe fisher, broad-shouldered, bare chest painted with
-  teal spirals, short wrapped skirt, a coiled net rope over one shoulder,
-  stylized game character, full body
-texture = sun-browned skin, teal paint, rust-red cloth, rope of pale fibre
+prompt = young colonist technician, broad-shouldered, sleeveless utility
+  suit, tool harness with small glowing modules, one forearm wrapped in a
+  flexible screen, short shaved hair with a light-line tattoo, science
+  fiction game character, full body
+texture = rust orange and charcoal fabric, glowing cyan modules, brown skin
+
+[villager_3]
+polycount = 12000
+pose = t-pose
+height = 1.65
+animate = idle, walking, sitting
+prompt = alien-born colonist woman in a hooded marsh suit, translucent
+  rain cape, breathing filter at the throat, a drone resting on her
+  shoulder, science fiction game character, full body
+texture = lilac and grey suit, clear cape, white drone with a violet eye
 
 # ---------------------------------------------------------------- plants --
 # Fitted to the size the world asks for (a tree is 7–16 m tall).
 
 [tree]
 polycount = 6000
-prompt = alien bulb tree, thick twisting trunk, canopy of three or four large
-  round pods like glowing lanterns, roots gripping the ground, stylized game
-  asset
-texture = dark bark with violet moss, pods pale green with a faint inner glow
+prompt = towering alien plant, smooth twisting trunk like a stalk of glass,
+  three or four large translucent bulbs at the top glowing from inside,
+  root tendrils spreading on the ground, science fiction alien flora
+texture = dark violet trunk with iridescent sheen, bulbs pale green with an
+  inner glow
 
 [tree_2]
 polycount = 6000
-prompt = alien tree with a tall slender trunk that splits into a wide flat
-  umbrella canopy of overlapping leathery leaves, stylized game asset
-texture = bark the colour of rust, leaves deep teal with amber undersides
+prompt = alien tree with a tall slender ribbed trunk opening into a wide flat
+  disc canopy of overlapping membrane fans, science fiction alien flora
+texture = rust-red ribbed trunk, membranes deep teal with glowing amber veins
 
 [tree_3]
 polycount = 6000
-prompt = gnarled alien swamp tree with a bulbous trunk, drooping fronds like
-  willow, hanging seed lanterns, stylized game asset
-texture = grey-green bark, fronds dusty lilac, lanterns glowing soft orange
+prompt = alien swamp organism, bulbous pale trunk, long drooping filaments
+  like jellyfish tentacles hanging from the crown, floating spores, science
+  fiction alien flora
+texture = grey-white trunk, filaments lilac and translucent with glowing tips
 
 [mushroom]
 polycount = 6000
-prompt = giant alien mushroom tall as a house, thick pale stalk, wide domed
-  cap, ribbed gills underneath that glow, stylized game asset
-texture = cream stalk, cap deep purple with pale spots, gills glowing cyan
+prompt = giant alien fungus tall as a building, smooth pale stem, wide domed
+  cap, luminous ribbed gills underneath, bio-luminescent, science fiction
+  alien flora
+texture = cream stem, cap deep purple with pale glowing spots, gills cyan
 
 [mushroom_2]
 polycount = 6000
-prompt = cluster of giant alien fungi, one tall thin stalk with a bell cap and
-  two shorter ones around its base, stylized game asset
-texture = ochre caps with crimson rims, stalks bone white
+prompt = cluster of giant alien fungal towers, one tall thin stem with a
+  bell cap and two shorter ones, translucent caps glowing from inside,
+  science fiction alien flora
+texture = amber translucent caps with crimson rims, bone white stems
 
 # ---------------------------------------------------------------- rocks --
 
 [boulder]
 polycount = 2000
-prompt = large weathered boulder, rounded, cracked, a little lichen, stylized
-  low poly game asset
-texture = grey-violet stone with pale lichen patches
+prompt = large smooth alien boulder, rounded, cracked, a vein of glowing
+  crystal running through it, low poly
+texture = grey-violet stone, pale cyan glowing crystal vein
 
 [boulder_2]
 polycount = 2000
-prompt = angular rock outcrop of layered slabs, stylized low poly game asset
-texture = dark slate with rust-coloured bands
+prompt = angular alien rock outcrop of layered slabs, low poly
+texture = dark slate with rust-coloured bands and a metallic sheen
 
 [spire]
 polycount = 2500
-prompt = tall thin needle of rock leaning slightly, eroded, stylized low poly
-  game asset
-texture = pale grey stone streaked with ochre
+prompt = tall thin needle of alien rock leaning slightly, eroded into
+  smooth organic curves, low poly
+texture = pale grey stone streaked with ochre and faint violet
 
 [crystal]
 polycount = 4000
 prompt = cluster of giant crystal shards growing out of the ground at
-  different angles, sharp hexagonal columns, stylized game asset
+  different angles, sharp hexagonal columns, glowing from within, science
+  fiction alien mineral
 texture = translucent ice blue with violet cores, glowing faintly
 
 [rib]
 polycount = 3000
-prompt = enormous curved rib bone arch standing on its two ends, weathered,
-  cracked, stylized game asset
-texture = bleached bone with grey weathering in the cracks
+prompt = enormous curved arch of an ancient alien megastructure half sunk
+  in the ground, smooth seamless material, weathered, standing on its two
+  ends, science fiction ruin
+texture = pale weathered ceramic with faint dead circuitry lines
 
 # ---------------------------------------------------------------- buildings --
 # Fitted to the footprint the world asks for; the origin is at the ground.
 
 [hut]
 polycount = 8000
-prompt = round tribal hut on tall wooden stilts over water, a circular deck
-  with a railing, woven reed walls, a steep conical thatched roof, a ladder,
-  stylized game asset
-texture = dark wet wood, golden thatch, woven reed walls in ochre and green
+prompt = small colony dwelling pod on tall slender alloy legs over water, a
+  round deck with a thin railing, smooth ceramic capsule with a curved
+  window band, a hatch and a ladder, antenna, science fiction architecture
+texture = matte white ceramic, graphite alloy legs, cyan glowing window band
 
 [hut_2]
 polycount = 8000
-prompt = stilt house with a square deck, walls of bundled reeds, a low peaked
-  roof of overlapping large leaves, fish drying on a rack, stylized game asset
-texture = grey driftwood, leaf roof deep green, reeds pale straw
+prompt = stilt habitat over a marsh, a wide flattened dome on four angled
+  alloy struts, solar membrane awning, hanging cargo nets, science fiction
+  architecture
+texture = celadon ceramic dome, dark alloy struts, amber light inside
 
 [house]
 polycount = 8000
-prompt = small stone house with thick walls, a pyramid thatched roof, a round
-  doorway hung with cloth, stylized game asset
-texture = ochre sandstone blocks, golden thatch, indigo door cloth
+prompt = small colony house, rounded organic shape grown from ceramic, a
+  dome roof with a skylight, an oval doorway with a sliding panel, science
+  fiction architecture
+texture = pearl white ceramic, smoked glass skylight, teal light at the door
 
 [house_2]
 polycount = 8000
-prompt = squat stone dwelling with a domed roof, tiny windows, clay chimney,
-  stylized game asset
-texture = pale clay with blue painted patterns around the door
+prompt = squat colony module, half buried, a low dome with a ring of round
+  windows, vent fins, science fiction architecture
+texture = sand-coloured composite, graphite fins, warm windows
 
 [house_3]
 polycount = 8000
-prompt = two-storey stone house with an external stair, a slate roof and a
-  wooden balcony, stylized game asset
-texture = grey stone, dark slate, weathered wood
+prompt = two-level colony dwelling, stacked offset rounded volumes, an
+  external curved ramp, a balcony with a thin rail, science fiction
+  architecture
+texture = lilac glazed ceramic, white trim, cyan light lines
 
 [tower]
 polycount = 8000
-prompt = round stone watchtower with a conical slate roof, arrow slits, a
-  small balcony near the top, stylized game asset
-texture = dark grey stone, blue-black slate roof
+prompt = slender colony spire, tapering tower of grown ceramic with a
+  glowing beacon at the top, a ring-shaped observation deck halfway up,
+  science fiction architecture
+texture = pearl white ceramic, smoked glass deck, cyan beacon
 
 [torch]
 polycount = 1500
-prompt = tribal standing torch, a tall wooden post wrapped in rope holding an
-  iron basket with a burning fire, stylized game asset
-texture = dark wood, rusted iron, bright orange flame
+prompt = slim alloy lamp pylon with a hovering glowing orb above it, a
+  small ring around the orb, science fiction street light
+texture = graphite alloy, white glowing orb with cyan halo
 
 [canoe]
 polycount = 2500
-prompt = long narrow dugout canoe carved from a single log, a paddle resting
-  inside, stylized low poly game asset
-texture = dark oiled wood with a carved pale pattern along the side
+prompt = small sleek hover skiff, narrow pointed hull, an open cockpit,
+  a low windshield, science fiction vehicle, low poly
+texture = white composite hull with an orange stripe, graphite cockpit
 
 # ---------------------------------------------------------------- animals --
 # Facing +Z like Meshy's exports; the game turns them round.
 
 [wader]
 polycount = 8000
-prompt = tall alien wading bird like a heron, very long thin legs, long neck,
-  a narrow spear beak, folded wings, standing, stylized game creature
-texture = pale rose and grey plumage, legs dark, one glowing amber eye
+prompt = tall alien wading creature like a heron crossed with a mantis,
+  very long thin legs, long neck, a narrow spear-like head, folded
+  translucent wing membranes, standing, science fiction alien creature
+texture = pale rose and grey skin, legs dark, one glowing amber eye
 
 [grazer]
 polycount = 8000
-prompt = large alien herd animal, barrel body, four stout legs, low heavy
-  head, patches of glowing lichen growing on its back, standing, stylized
-  game creature
-texture = dark moss-green hide, lichen patches glowing pale green
+prompt = large alien herd animal, smooth barrel body, six stout legs, low
+  heavy head with sensory frills, patches of bioluminescent growth on its
+  back, standing, science fiction alien creature
+texture = dark moss-green hide, glowing pale green growth patches
 
 [goat]
 polycount = 6000
-prompt = shaggy alien mountain goat, curved horns, standing on four legs,
-  stylized game creature
-texture = grey-white shaggy fur, dark horns
+prompt = agile alien mountain animal, four long thin legs, a curved bony
+  crest instead of horns, shaggy filament fur, standing, science fiction
+  alien creature
+texture = grey-white filaments, dark crest with blue sheen
 
 [kite]
 polycount = 5000
 prompt = alien flying ray creature, flat wide body with two large wing fins
-  spread out, long thin tail, gliding, stylized game creature
+  spread out, long thin tail, gliding, science fiction alien creature
 texture = translucent violet skin with glowing magenta edges
 
 [leaper]
 polycount = 4000
-prompt = sleek alien fish with a torpedo body, large tail fin, small fins,
-  stylized game creature
-texture = silver-blue scales with an iridescent sheen
+prompt = sleek alien fish with a torpedo body, large forked tail fin,
+  bioluminescent spots along the flank, science fiction alien creature
+texture = silver-blue skin with an iridescent sheen and cyan spots

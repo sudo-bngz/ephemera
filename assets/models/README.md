@@ -13,7 +13,7 @@ ground, so any export fits.
 |-----------------|-------------------------------------------|-------------------------------|
 | `ephemera.glb`  | the creature (player + 3 rivals)          | hand: ~7 m long, faces -Z     |
 | `judith.glb`    | Judith on foot and in the saddle          | hand: ~1.9 m tall             |
-| `villager.glb`  | the tribe: villagers, the rivals' riders  | hand: ~1.9 m tall             |
+| `villager.glb`  | the clans: villagers, the rivals' riders  | hand: ~1.9 m tall             |
 | `reed_tall.glb` | tall, *solid* reed clumps (obstacles)     | unit: 1 m radius × 1 m        |
 | `reed.glb`      | short reed clumps (soft, fly-through)     | unit: 1 m radius × 1 m        |
 | `gate.glb`      | race gates                                | unit: 1 m tall                |

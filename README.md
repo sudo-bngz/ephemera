@@ -1,10 +1,23 @@
 # EPHEMERA
 
-*An arcade racer on the back of a giant mosquito.*
+*Science fiction on the back of a giant mosquito.*
 
-Judith was raised by the marsh tribe but born of no clan. The tribe does not name a
-child until she has ridden the wind — so she has one season to find a wild
-**Ephemera**, make it hers, and race it at the Gathering.
+On Khera, a marsh moon under a violet gas giant, the settlers live in clans — an old
+way of living, kept by choice — in spires of grown ceramic, among machines older than
+their names. A child of the clans is not named until she has ridden an **Ephemera**,
+the moon's wild flyers. Judith was found as an infant at the foot of the veils, the
+auroras that hum over the marsh; raised by the clans, born of none. This season she
+will stalk one, bond with it, and race it at the Gathering.
+
+The look is science fiction, not fantasy: the clans' organisation is tribal, nothing
+they make is. See [`assets/models/meshy-prompts.txt`](assets/models/meshy-prompts.txt)
+for the art direction.
+
+**Starting.** The game opens on a menu — *Begin the rite*, *Into the veils*, *Race*,
+*Controls*, *Quit* — over the title world. A journey opens with a few story cards
+(ENTER for the next, ESC to skip), and every phase starts with a briefing — what to
+do, and the keys for it — that holds the game until ENTER. `ESC` pauses (resume,
+controls, restart, menu, quit) and `TAB` shows the controls anywhere.
 
 Built in Rust on [Bevy 0.17](https://bevyengine.org). No external assets: the
 creature and the rider are assembled from primitives, and the **endless world is drawn
@@ -33,9 +46,9 @@ editions you've found.
 
 The world is lived in. Seven lands — marsh, fungal bloom, bone dunes, crystal flats, a
 field of monoliths, wooded groves and a **mountain range** that climbs above the fog —
-with **rivers** cut across all of them. The tribe has built **stilt villages** in the
-shallows, **walled towns** on flattened ground and **holds** of towers on the mountain
-shoulders, with people walking between the houses and torches burning. Herds of
+with **rivers** cut across all of them. The clans have built **stilt habitats** in the
+shallows, **ceramic towns** on flattened ground and **holds** of spires on the mountain
+shoulders, with people walking between the domes under plasma lamps. Herds of
 **grazers** drift over the grass, **waders** stalk the pools and take off when you
 come close, flocks of **kites** ride the air over the high lands, and **leapers**
 break the surface of the lakes.
@@ -67,7 +80,7 @@ calls it over, `F` beside it puts her back in the saddle.
 | Stalk | `W/S` walk · `A/D` turn · `C` crouch · `Shift` sprint · `Space` throw net |
 | Camp | `1`–`4` pick what to do with the dawn · `Enter` ride to the Gathering |
 | Flight | `W/S` throttle · `A/D` bank · `Q` dive / `E` climb · `Shift` boost |
-| Anywhere | `Enter` confirm · `Esc` back to title / quit |
+| Anywhere | `Enter` confirm · `Esc` pause menu · `Tab` controls · menus: `↑/↓` + `Enter` or the mouse |
 | Explore, flying | flight controls · `F` land and dismount · `N` new world |
 | Explore, on foot | `WASD` walk (camera-relative) · mouse / arrows look · `Shift` run · `Space` jump · `C` crouch · `F` mount (beside the Ephemera) or whistle it over |
 | Sound | `M` mute · `--mute` start muted |
@@ -259,7 +272,7 @@ humanoids; the Ephemera is rigged by the game itself at load (`rig.rs`).
 
 - Gamepad support — `InputAxes` is already the single point to extend.
 - Audio ducking and a mixer; HRTF for the hums.
-- Ghost replay of your best lap; tribe leaderboard.
+- Ghost replay of your best lap; clan leaderboard.
 - A fourth phase: the naming ceremony.
 
 ## License

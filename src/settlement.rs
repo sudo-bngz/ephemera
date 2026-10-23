@@ -3,9 +3,10 @@
 //!
 //! Where they stand is decided by the terrain (`terrain::Site`, a pure
 //! function of the world seed, so every chunk agrees); what they look like
-//! is drawn here from the site's own seed. Every settlement has people in
-//! it: rigged figures of the tribe who wander between the houses, and torches
-//! that flicker when night falls on them.
+//! is drawn here from the site's own seed. The clans live tribally but build
+//! like no one on Earth: grown ceramic, alloy and smoked glass, domes and
+//! spires, plasma lamps. Every settlement has people in it, rigged figures
+//! who wander between the dwellings.
 
 use bevy::ecs::system::RunSystemOnce;
 use bevy::light::NotShadowCaster;
@@ -65,41 +66,68 @@ fn setup_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // The clans build in grown ceramic, alloy and smoked glass, lit from
+    // within: alien and engineered, not timber and thatch.
     let rough = |m: &mut Assets<StandardMaterial>, c: Color| {
         m.add(StandardMaterial {
             base_color: c,
-            perceptual_roughness: 0.95,
+            perceptual_roughness: 0.3,
+            reflectance: 0.6,
+            ..default()
+        })
+    };
+    let alloy = |m: &mut Assets<StandardMaterial>, c: Color| {
+        m.add(StandardMaterial {
+            base_color: c,
+            metallic: 0.85,
+            perceptual_roughness: 0.35,
+            ..default()
+        })
+    };
+    let glow = |m: &mut Assets<StandardMaterial>, c: Color, k: f32| {
+        m.add(StandardMaterial {
+            base_color: c,
+            emissive: c.to_linear() * k,
+            perceptual_roughness: 0.2,
             ..default()
         })
     };
     commands.insert_resource(SettlementAssets {
         post: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(6)),
         round_wall: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(12)),
-        cone_roof: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(12)),
+        // Domes, not cones and pyramids.
+        cone_roof: meshes.add(Sphere::new(0.5).mesh().uv(24, 12)),
         block: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        pyramid_roof: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(4)),
+        pyramid_roof: meshes.add(Sphere::new(0.5).mesh().uv(24, 12)),
         disc: meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(16)),
         flame: meshes.add(Sphere::new(1.0).mesh().ico(1).unwrap()),
         cloth: meshes.add(Cuboid::new(0.06, 1.0, 1.0)),
-        wood: rough(&mut materials, Color::srgb(0.36, 0.26, 0.18)),
-        thatch: rough(&mut materials, Color::srgb(0.62, 0.52, 0.28)),
+        wood: alloy(&mut materials, Color::srgb(0.22, 0.24, 0.28)),
+        thatch: rough(&mut materials, Color::srgb(0.86, 0.88, 0.90)),
         stones: vec![
-            rough(&mut materials, Color::srgb(0.62, 0.54, 0.42)), // ochre
-            rough(&mut materials, Color::srgb(0.70, 0.70, 0.66)), // pale
-            rough(&mut materials, Color::srgb(0.34, 0.42, 0.56)), // blue stone
-            rough(&mut materials, Color::srgb(0.32, 0.30, 0.34)), // dark
+            rough(&mut materials, Color::srgb(0.90, 0.90, 0.88)), // pearl ceramic
+            rough(&mut materials, Color::srgb(0.62, 0.80, 0.82)), // celadon
+            rough(&mut materials, Color::srgb(0.70, 0.64, 0.86)), // lilac glaze
+            alloy(&mut materials, Color::srgb(0.30, 0.32, 0.36)), // graphite
         ],
-        slate: rough(&mut materials, Color::srgb(0.22, 0.20, 0.26)),
+        slate: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.10, 0.14, 0.20, 0.92),
+            emissive: LinearRgba::rgb(0.05, 0.25, 0.35),
+            metallic: 0.6,
+            perceptual_roughness: 0.08,
+            ..default()
+        }),
+        // Cold light: the clans' lamps are plasma, not fire.
         flame_mat: materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.75, 0.3),
-            emissive: LinearRgba::rgb(14.0, 6.0, 1.2),
+            base_color: Color::srgb(0.6, 0.95, 1.0),
+            emissive: LinearRgba::rgb(3.0, 9.0, 12.0),
             unlit: true,
             ..default()
         }),
         banners: vec![
-            rough(&mut materials, Color::srgb(0.75, 0.22, 0.18)),
-            rough(&mut materials, Color::srgb(0.18, 0.42, 0.62)),
-            rough(&mut materials, Color::srgb(0.85, 0.72, 0.25)),
+            glow(&mut materials, Color::srgb(0.35, 0.95, 1.0), 3.0),
+            glow(&mut materials, Color::srgb(0.90, 0.40, 1.0), 3.0),
+            glow(&mut materials, Color::srgb(1.0, 0.72, 0.35), 2.5),
         ],
     });
 }
@@ -628,13 +656,16 @@ fn flicker(
 ) {
     let t = time.elapsed_secs();
     for (torch, mut tf) in &mut torches {
-        let f = 1.0 + 0.25 * (t * 17.0 + torch.phase).sin() * (t * 7.3 + torch.phase * 2.0).cos();
+        // Lamps breathe and the orb hovers a little over its pylon.
+        let f = 1.0 + 0.12 * (t * 2.0 + torch.phase).sin();
         let s = torch.size * f;
-        tf.scale = Vec3::new(s, s * (1.2 + 0.3 * (t * 11.0 + torch.phase).sin()), s);
+        tf.scale = Vec3::splat(s);
+        tf.translation.y = 2.3 + 0.08 * (t * 1.3 + torch.phase).sin();
     }
     if let Some(m) = mats.get_mut(&sa.flame_mat) {
-        let k = 1.0 + 0.2 * (t * 13.0).sin();
-        m.emissive = LinearRgba::rgb(14.0 * k, 6.0 * k, 1.2 * k);
+        // A slow electric pulse rather than a flicker.
+        let k = 1.0 + 0.25 * (t * 2.3).sin() + 0.05 * (t * 31.0).sin();
+        m.emissive = LinearRgba::rgb(3.0 * k, 9.0 * k, 12.0 * k);
     }
     for (b, mut tf) in &mut banners {
         let a = (t * 6.0 + b.0).sin() * 0.3 + (t * 11.0 + b.0 * 2.0).sin() * 0.1;
