@@ -158,6 +158,43 @@ mod smoke {
         *app.world().resource::<State<GamePhase>>().get()
     }
 
+    /// `--race` enters the race on the very first frame, where Bevy reports a
+    /// zero delta time. Nothing may turn NaN, or the camera renders nothing.
+    #[test]
+    fn race_survives_zero_delta_first_frame() {
+        let mut app = app();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+        app.world_mut()
+            .resource_mut::<NextState<GamePhase>>()
+            .set(GamePhase::Racing);
+        tick(&mut app, 3);
+        assert_eq!(phase(&app), GamePhase::Racing);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            16,
+        )));
+        press(&mut app, KeyCode::KeyW);
+        tick(&mut app, 400);
+
+        let (tf, proj) = app
+            .world_mut()
+            .query_filtered::<(&Transform, &Projection), With<crate::camera::ChaseCamera>>()
+            .single(app.world())
+            .expect("one camera");
+        assert!(
+            tf.translation.is_finite(),
+            "camera position: {:?}",
+            tf.translation
+        );
+        assert!(
+            tf.rotation.is_finite(),
+            "camera rotation: {:?}",
+            tf.rotation
+        );
+        if let Projection::Perspective(p) = proj {
+            assert!(p.fov.is_finite(), "camera fov: {}", p.fov);
+        }
+    }
+
     #[test]
     fn full_rite_of_passage() {
         let mut app = app();

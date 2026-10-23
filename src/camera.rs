@@ -49,8 +49,24 @@ pub fn follow(
         return;
     };
     let dt = time.delta_secs().min(0.05);
-    let velocity = vel.map(|v| v.0).unwrap_or(Vec3::ZERO);
+    // Belt and braces: a non-finite value reaching the camera would stick
+    // forever (the smoothing feeds on its own output) and blank the screen.
+    let velocity = vel
+        .map(|v| v.0)
+        .filter(|v| v.is_finite())
+        .unwrap_or(Vec3::ZERO);
     let speed = velocity.length();
+    if !target_tf.translation().is_finite() {
+        return;
+    }
+    if !cam_tf.translation.is_finite() || !cam_tf.rotation.is_finite() {
+        *cam_tf = Transform::from_translation(target_tf.translation() + Vec3::new(0.0, 4.0, 10.0));
+    }
+    if let Projection::Perspective(p) = &mut *proj {
+        if !p.fov.is_finite() {
+            p.fov = chase.base_fov;
+        }
+    }
 
     let target_pos = target_tf.translation();
     let forward = if let Some(orbit) = chase.orbit {

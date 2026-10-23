@@ -598,6 +598,11 @@ fn integrate(
     pools: Query<(&GlobalTransform, &Pool)>,
 ) {
     let dt = time.delta_secs().min(1.0 / 30.0);
+    // The first frame of the app (e.g. `--race`) has a zero delta: there is
+    // nothing to integrate, and `/ dt` below would poison everything with NaN.
+    if dt <= f32::EPSILON {
+        return;
+    }
     for (mut tf, mut r, input, mut vel, mut flap, player) in &mut q {
         let is_player = player.is_some();
         let p = tf.translation;
