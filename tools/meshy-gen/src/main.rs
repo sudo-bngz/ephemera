@@ -635,6 +635,7 @@ fn main() {
     let mut dry_run = false;
     let mut force = false;
     let mut reanimate = false;
+    let mut library: Option<String> = None;
     let mut base = std::env::var("MESHY_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE.into());
     let mut ai_model = "latest".to_string();
     let mut poll = Duration::from_secs(5);
@@ -644,6 +645,9 @@ fn main() {
             "--dry-run" | "-n" => dry_run = true,
             "--force" | "-f" => force = true,
             "--reanimate" => reanimate = true,
+            "--library" => {
+                library = Some(args.next().unwrap_or_default());
+            }
             "--base-url" => base = args.next().expect("--base-url needs a value"),
             "--ai-model" => ai_model = args.next().expect("--ai-model needs a value"),
             "--poll-ms" => {
@@ -658,6 +662,7 @@ fn main() {
                     "usage: meshy-gen [model…] [--dry-run] [--force] [--reanimate] [--ai-model NAME] [--base-url URL]\n\
                      Reads assets/models/meshy-prompts.txt, writes assets/models/<model>.glb.\n\
                      --reanimate  fetch the `animate =` clips again for models that already have some\n\
+                     --library [WORD]  list Meshy's animation library (ids, names, preview GIFs)\n\
                      Needs MESHY_API_KEY."
                 );
                 return;
@@ -724,6 +729,58 @@ fn main() {
             }
             if !s.animate.is_empty() {
                 println!("  animate: {} ({} m tall)", s.animate.join(", "), s.height);
+            }
+        }
+        return;
+    }
+
+    // Browsing Meshy's animation library (free): pick actions by id.
+    if let Some(word) = library {
+        let Some(key) = std::env::var("MESHY_API_KEY").ok().filter(|k| !k.trim().is_empty())
+        else {
+            eprintln!("--library needs MESHY_API_KEY");
+            std::process::exit(2);
+        };
+        let api = Api {
+            base: base.trim_end_matches('/').to_string(),
+            key,
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(20))
+                .timeout_read(Duration::from_secs(60))
+                .build(),
+        };
+        let path = if word.is_empty() {
+            "/openapi/v1/animations/library".to_string()
+        } else {
+            format!("/openapi/v1/animations/library?search={}", word.replace(' ', "%20"))
+        };
+        match api.get(&path) {
+            Ok(v) => {
+                let items = v.as_array().cloned().unwrap_or_default();
+                for it in &items {
+                    let n = it["name"].as_str().unwrap_or("?");
+                    let cat = it["category"].as_str().unwrap_or("");
+                    let sub = it["sub_category"].as_str().unwrap_or("");
+                    let low = format!("{n} {sub}").to_ascii_lowercase();
+                    let prop = if PROPS.iter().any(|p| low.contains(p)) {
+                        "  [prop/mount]"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "#{:<5} {n:<36} {cat}/{sub}{prop}\n       {}",
+                        it["action_id"].as_u64().unwrap_or(0),
+                        it["preview_url"].as_str().unwrap_or("")
+                    );
+                }
+                println!(
+                    "\n{} action(s). Put the ones you want in `animate =` as `#id`, e.g.\n  animate = idle, walking, running, #123",
+                    items.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("library: {e}");
+                std::process::exit(1);
             }
         }
         return;

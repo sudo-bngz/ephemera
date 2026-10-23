@@ -40,7 +40,10 @@ texture = iridescent dark violet chitin with oil-slick sheen, glowing teal
 polycount = 15000
 pose = t-pose
 height = 1.7
-animate = idle, walking, running, crouch walk, jump, swimming, sitting
+# No `sitting`: Meshy's sitting clips can come with a horse or a chair
+# built in. Without a riding clip the game seats her in a held crouch. To
+# choose one yourself: `meshy-gen --library sit`, then add its `#id`.
+animate = idle, walking, running, crouch walk, jump, swimming
 prompt = young woman pilot from an alien colony, lean and athletic, fitted
   layered flight suit of soft technical fabric with ceramic armour plates on
   the shoulders and shins, a slim visor pushed up on her forehead, a compact

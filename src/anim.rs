@@ -90,7 +90,10 @@ impl Action {
         match self {
             Action::Run => &[Action::Walk, Action::Idle],
             Action::Crouch => &[Action::Walk, Action::Idle],
-            Action::Jump | Action::Swim | Action::Ride => &[Action::Idle, Action::Walk],
+            // No riding clip: a crouch, held still, is the nearest thing to
+            // sitting astride.
+            Action::Ride => &[Action::Crouch, Action::Idle],
+            Action::Jump | Action::Swim => &[Action::Idle, Action::Walk],
             Action::Walk => &[Action::Run, Action::Idle],
             Action::Fly => &[Action::Idle],
             Action::Idle => &[Action::Walk],
@@ -593,8 +596,15 @@ fn drive_clips(
                 .repeat();
             clips.current = Some(action);
         }
+        // A crouch standing in for a ride is held at mid-stride.
+        let held = wanted == Action::Ride && action == Action::Crouch;
         if let Some(active) = player.animation_mut(node) {
-            active.set_speed(speed);
+            if held {
+                active.set_speed(0.0);
+                active.seek_to(0.25);
+            } else {
+                active.set_speed(speed);
+            }
         }
     }
 }
