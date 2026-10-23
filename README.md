@@ -79,7 +79,7 @@ calls it over, `F` beside it puts her back in the saddle.
 |---|---|
 | Stalk | `W/S` walk · `A/D` turn · `C` crouch · `Shift` sprint · `Space` throw net |
 | Camp | `1`–`4` pick what to do with the dawn · `Enter` ride to the Gathering |
-| Flight | `W/S` throttle · `A/D` bank · `Q` dive / `E` climb · `Shift` boost |
+| Flight | `W/S` throttle · `A/D` bank · mouse steers and pitches · `Q`/`E` nose down / up · `Space` beat straight up (hover) · `C` fold and drop · `Shift` boost · `V` first / third person |
 | Anywhere | `Enter` confirm · `Esc` pause menu · `Tab` controls · menus: `↑/↓` + `Enter` or the mouse |
 | Explore, flying | flight controls · `F` land and dismount · `N` new world |
 | Explore, on foot | `WASD` walk (camera-relative) · mouse / arrows look · `Shift` run · `Space` jump · `C` crouch · `F` mount (beside the Ephemera) or whistle it over |

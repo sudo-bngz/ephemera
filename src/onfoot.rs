@@ -364,17 +364,13 @@ fn wrap(mut a: f32) -> f32 {
     a
 }
 
-/// The mouse is captured while she walks, free otherwise.
-fn cursor(
-    walkers: Query<(), With<Walker>>,
-    ux: Res<crate::menu::Ux>,
-    mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
-) {
+/// The mouse is captured while she flies or walks (it steers and looks),
+/// free for the menus.
+fn cursor(ux: Res<crate::menu::Ux>, mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
     let Ok(mut cursor) = windows.single_mut() else {
         return;
     };
-    // Free for the menus.
-    let on_foot = !walkers.is_empty() && !ux.overlay.blocks();
+    let on_foot = !ux.overlay.blocks();
     let wanted = if on_foot {
         CursorGrabMode::Locked
     } else {
@@ -416,8 +412,9 @@ impl Plugin for OnFootPlugin {
             Update,
             cursor
                 .in_set(crate::GameSet::Hud)
-                .run_if(in_state(GamePhase::Explore)),
+                .run_if(in_state(GamePhase::Explore).or(in_state(GamePhase::Racing))),
         )
-        .add_systems(OnExit(GamePhase::Explore), release_cursor);
+        .add_systems(OnExit(GamePhase::Explore), release_cursor)
+        .add_systems(OnExit(GamePhase::Racing), release_cursor);
     }
 }

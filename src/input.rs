@@ -22,8 +22,13 @@ pub struct InputAxes {
     pub look_mouse: Vec2,
     /// Boost (Shift) / sprint while on foot.
     pub boost: bool,
-    /// Crouch while on foot (C, or Ctrl — but Ctrl+arrows is a macOS shortcut).
+    /// Crouch while on foot, fold and drop in flight (C, or Ctrl — but
+    /// Ctrl+arrows is a macOS shortcut).
     pub crouch: bool,
+    /// SPACE held: beat straight up in flight.
+    pub up: bool,
+    /// V: switch between first and third person.
+    pub view_pressed: bool,
     /// Primary action (Space) — throw net, jump, confirm.
     pub action_pressed: bool,
     /// Mount, dismount or whistle (F).
@@ -69,6 +74,8 @@ pub(crate) fn sample(
             || keys.pressed(KeyCode::ControlLeft)
             || keys.pressed(KeyCode::ControlRight),
         action_pressed: keys.just_pressed(KeyCode::Space),
+        up: keys.pressed(KeyCode::Space),
+        view_pressed: keys.just_pressed(KeyCode::KeyV),
         interact_pressed: keys.just_pressed(KeyCode::KeyF),
         confirm_pressed: keys.just_pressed(KeyCode::Enter)
             || keys.just_pressed(KeyCode::NumpadEnter),

@@ -5,6 +5,12 @@
 //! On foot it becomes an **orbit camera**: it hangs over Judith's shoulder
 //! at the angle the mouse (or the arrow keys) set, drifts back behind her
 //! when left alone, and never sinks into the ground.
+//!
+//! **V** switches to **first person**, from Judith's eyes: in the saddle,
+//! looking over the Ephemera's head and banking with it; on foot, looking
+//! where the mouse looks. Judith herself is hidden so she doesn't fill the
+//! view. In third person the chase camera also tips with the creature's
+//! nose, so climbs and dives read.
 
 use bevy::prelude::*;
 
@@ -36,6 +42,8 @@ pub struct ChaseCamera {
     pub orbit_pitch: f32,
     /// Seconds since the player last turned the camera.
     pub idle: f32,
+    /// From Judith's eyes.
+    pub first_person: bool,
 }
 
 impl Default for ChaseCamera {
@@ -51,6 +59,7 @@ impl Default for ChaseCamera {
             orbit_yaw: 0.0,
             orbit_pitch: 0.25,
             idle: 10.0,
+            first_person: false,
         }
     }
 }
@@ -78,10 +87,15 @@ impl ChaseCamera {
 pub fn follow(
     time: Res<Time>,
     terrain: Option<Res<crate::world::WorldTerrain>>,
-    targets: Query<(&GlobalTransform, &CameraTarget, Option<&Velocity>)>,
+    targets: Query<(
+        &GlobalTransform,
+        &CameraTarget,
+        Option<&Velocity>,
+        Option<&crate::anim::ModelBounds>,
+    )>,
     mut cams: Query<(&mut Transform, &mut Projection, &mut ChaseCamera)>,
 ) {
-    let Ok((target_tf, follow, vel)) = targets.single() else {
+    let Ok((target_tf, follow, vel, bounds)) = targets.single() else {
         return;
     };
     let Ok((mut cam_tf, mut proj, mut chase)) = cams.single_mut() else {
@@ -113,6 +127,36 @@ pub fn follow(
         let f = target_tf.forward().as_vec3();
         Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::NEG_Z)
     };
+
+    if chase.first_person && chase.orbit.is_none() {
+        chase.shake = (chase.shake - dt * 2.5).max(0.0);
+        let t = time.elapsed_secs() * 47.0;
+        let shake = Vec3::new(t.sin() * 0.7, (t * 1.3).cos(), 0.0) * chase.shake * 0.05;
+        if chase.mode == CameraMode::Orbit {
+            // On foot: her eyes, looking where the mouse looks.
+            let dir = Quat::from_rotation_y(chase.orbit_yaw)
+                * Quat::from_rotation_x(-chase.orbit_pitch * 0.9)
+                * Vec3::NEG_Z;
+            let eye = target_pos + Vec3::Y * 1.62;
+            cam_tf.translation = eye + shake;
+            cam_tf.look_to(dir, Vec3::Y);
+        } else {
+            // In the saddle: her eyes over the creature's head, turning,
+            // tipping and banking with it.
+            let seat = crate::anim::saddle_point(bounds) + Vec3::new(0.0, 0.78, 0.05);
+            let eye = target_tf.transform_point(seat);
+            cam_tf.translation = eye + shake;
+            let want = target_tf.rotation() * Quat::from_rotation_x(-0.1);
+            let k = 1.0 - (-14.0 * dt).exp();
+            cam_tf.rotation = cam_tf.rotation.slerp(want, k);
+        }
+        if let Projection::Perspective(p) = &mut *proj {
+            let speed_t = (speed / chase.fov_speed_ref).clamp(0.0, 1.0);
+            let wanted = chase.base_fov + 0.12 + chase.fov_gain * speed_t;
+            p.fov += (wanted - p.fov) * (1.0 - (-6.0 * dt).exp());
+        }
+        return;
+    }
 
     if chase.mode == CameraMode::Orbit {
         // Left alone while she moves, the camera swings round behind her.
@@ -158,7 +202,18 @@ pub fn follow(
     let speed_t = (speed / chase.fov_speed_ref).clamp(0.0, 1.5);
     let distance = follow.distance * (1.0 - 0.18 * speed_t);
     let height = follow.height * (1.0 - 0.25 * speed_t);
-    let desired = target_pos - forward * distance + Vec3::Y * height;
+    // Tip with the nose: in a climb the camera drops behind and below, in a
+    // dive it rises behind and above, so the slope reads on screen.
+    let climb = if chase.orbit.is_none() {
+        velocity.y.clamp(-40.0, 40.0) / 40.0
+    } else {
+        0.0
+    };
+    let desired = target_pos - forward * distance + Vec3::Y * height * (1.0 - 0.9 * climb);
+    let desired = match &terrain {
+        Some(t) => desired.with_y(desired.y.max(t.0.surface(desired.x, desired.z) + 0.8)),
+        None => desired,
+    };
 
     // Critically damped-ish exponential smoothing: frame-rate independent.
     let k = 1.0 - (-follow.stiffness * dt).exp();
@@ -193,10 +248,37 @@ fn wrap(mut a: f32) -> f32 {
     a
 }
 
+/// V: first or third person. Judith is hidden from her own eyes.
+fn toggle_view(
+    axes: Res<crate::input::InputAxes>,
+    mut cams: Query<&mut ChaseCamera>,
+    mut judith: Query<&mut Visibility, With<crate::components::Judith>>,
+) {
+    let Ok(mut cam) = cams.single_mut() else {
+        return;
+    };
+    if axes.view_pressed {
+        cam.first_person = !cam.first_person;
+    }
+    let want = if cam.first_person && cam.orbit.is_none() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    for mut v in &mut judith {
+        if *v != want {
+            *v = want;
+        }
+    }
+}
+
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, follow.in_set(crate::GameSet::Camera));
+        app.add_systems(
+            Update,
+            (toggle_view, follow).chain().in_set(crate::GameSet::Camera),
+        );
     }
 }

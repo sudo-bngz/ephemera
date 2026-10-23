@@ -1094,6 +1094,86 @@ mod smoke {
         assert_eq!(app.world().resource::<Ux>().overlay, Overlay::None);
     }
 
+    /// Flight like a bird: the wings lift her straight up past the old 40 m
+    /// ceiling, a dive gathers speed, and V puts the camera in her eyes.
+    #[test]
+    fn flies_like_a_bird_and_sees_from_the_saddle() {
+        use crate::racing::{Player, Rider};
+        let mut app = app();
+        explore(&mut app, 3);
+        tick(&mut app, 5);
+        let eph = app
+            .world_mut()
+            .query_filtered::<Entity, With<Player>>()
+            .single(app.world())
+            .unwrap();
+        let terrain = app
+            .world()
+            .resource::<crate::world::WorldTerrain>()
+            .0
+            .clone();
+        let alt = |app: &App| {
+            let p = app.world().get::<Transform>(eph).unwrap().translation;
+            p.y - terrain.surface(p.x, p.z)
+        };
+        // Hover-climb: SPACE alone, no throttle.
+        press(&mut app, KeyCode::Space);
+        tick(&mut app, 600);
+        release(&mut app, KeyCode::Space);
+        let high = alt(&app);
+        assert!(high > 60.0, "only {high:.1} m up after 10 s of wingbeats");
+        // Level flight, then a dive: speed grows beyond level top speed.
+        press(&mut app, KeyCode::KeyW);
+        tick(&mut app, 360);
+        let level = app.world().get::<Rider>(eph).unwrap().speed;
+        press(&mut app, KeyCode::KeyQ);
+        tick(&mut app, 90);
+        let diving = app.world().get::<Rider>(eph).unwrap().speed;
+        release(&mut app, KeyCode::KeyQ);
+        assert!(diving > level + 2.0, "dive {diving:.1} vs level {level:.1}");
+        assert!(alt(&app) < high, "the dive didn't come down");
+        // Pulling up comes back smoothly: the nose levels on release.
+        tick(&mut app, 120);
+        let tilt = app.world().get::<Transform>(eph).unwrap().rotation;
+        let (_, pitch, _) = tilt.to_euler(EulerRot::YXZ);
+        assert!(pitch.abs() < 0.15, "nose didn't level: {pitch}");
+        release(&mut app, KeyCode::KeyW);
+
+        // First person: the camera is at her head, and she is hidden.
+        press(&mut app, KeyCode::KeyV);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::KeyV);
+        tick(&mut app, 5);
+        let judith = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::components::Judith>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(
+            app.world().get::<Visibility>(judith),
+            Some(&Visibility::Hidden)
+        );
+        let cam = app
+            .world_mut()
+            .query_filtered::<&Transform, With<crate::camera::ChaseCamera>>()
+            .single(app.world())
+            .unwrap()
+            .translation;
+        let body = app.world().get::<Transform>(eph).unwrap().translation;
+        assert!(
+            cam.distance(body) < 3.0,
+            "first-person camera {:.1} m from the creature",
+            cam.distance(body)
+        );
+        press(&mut app, KeyCode::KeyV);
+        tick(&mut app, 2);
+        release(&mut app, KeyCode::KeyV);
+        assert_eq!(
+            app.world().get::<Visibility>(judith),
+            Some(&Visibility::Inherited)
+        );
+    }
+
     /// N draws a new world in place.
     #[test]
     fn new_world_on_demand() {

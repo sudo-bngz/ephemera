@@ -7,6 +7,13 @@
 //! bound by exactly the same physics as the player, and tuning the feel
 //! happens in a single place.
 //!
+//! Flight is meant to feel like a bird's (an insect's, really): the nose
+//! follows the stick smoothly and levels itself when let go; diving trades
+//! height for speed and climbing pays for height with it; the wings can
+//! also beat straight up (SPACE) or fold for a drop (C), even hovering; the
+//! sky is open to 240 m above the ground, thinning above 180. The mouse
+//! flies too: up and down for the nose, sideways to steer.
+//!
 //! Speed sensation is layered: a low chase camera that widens its FOV with
 //! speed (`camera.rs`), speed lines streaming past, banking into turns,
 //! camera shake on boost, reed beds whipping past at ground level, and a
@@ -37,7 +44,13 @@ const GATE_RADIUS: f32 = 8.0;
 const GATE_HEIGHT: f32 = 11.0;
 /// Flight altitude limits, above the ground (or the water) below.
 const MIN_ALT: f32 = 1.0;
-const MAX_ALT: f32 = 40.0;
+/// Above this the air thins: climbing gets harder…
+const THIN_AIR: f32 = 180.0;
+/// …and here it stops.
+const MAX_ALT: f32 = 240.0;
+/// Wingbeats alone: metres per second straight up, and down.
+const CLIMB_RATE: f32 = 9.0;
+const DROP_RATE: f32 = 14.0;
 const COUNTDOWN: f32 = 3.6;
 const SPEED_LINES: usize = 56;
 
@@ -130,6 +143,8 @@ pub struct Rider {
     /// Seconds before another reed impact can cost speed again.
     bump_cooldown: f32,
     was_boosting: bool,
+    /// Vertical speed from the wings alone (SPACE / C), m/s.
+    climb: f32,
 }
 
 #[derive(Component, Default, Debug, Clone, Copy)]
@@ -138,6 +153,16 @@ pub(crate) struct FlightInput {
     throttle: f32,
     pitch: f32,
     boost: bool,
+    /// −1 fold and drop … +1 beat straight up.
+    lift: f32,
+}
+
+/// The mouse's share of the stick: moved by the mouse, drifting back to
+/// centre when it rests, so a flick is a turn and a held push is a dive.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct MouseStick {
+    pub pitch: f32,
+    pub steer: f32,
 }
 
 #[derive(Component, Debug)]
@@ -416,6 +441,7 @@ fn setup(
                     buck_dir: 1.0,
                     bump_cooldown: 0.0,
                     was_boosting: false,
+                    climb: 0.0,
                 },
                 Racer::new(name),
             ),
@@ -502,6 +528,7 @@ pub(crate) fn spawn_player_rider(
                 buck_dir: 1.0,
                 bump_cooldown: 0.0,
                 was_boosting: false,
+                climb: 0.0,
             },
         ),
     );
@@ -578,25 +605,36 @@ fn clock(time: Res<Time>, mut race: ResMut<Race>) {
 }
 
 fn player_input(
+    time: Res<Time>,
     axes: Res<InputAxes>,
     race: Res<Race>,
+    mut stick: ResMut<MouseStick>,
     mut q: Query<(&mut FlightInput, Has<AutoLand>, Has<Parked>), With<Player>>,
 ) {
+    let dt = time.delta_secs();
+    // Mouse up is nose up.
+    stick.pitch = (stick.pitch - axes.look_mouse.y * 0.006).clamp(-1.0, 1.0);
+    stick.steer = (stick.steer + axes.look_mouse.x * 0.004).clamp(-1.0, 1.0);
+    let back = 1.0 - (-1.8 * dt).exp();
+    stick.pitch -= stick.pitch * back;
+    stick.steer -= stick.steer * back;
     for (mut fi, landing, parked) in &mut q {
         *fi = if landing {
             // Brake and sink; the controls are hers again once she's down.
             FlightInput {
                 steer: axes.steer * 0.3,
                 throttle: -1.0,
-                pitch: -1.0,
+                pitch: -0.4,
                 boost: false,
+                lift: -0.6,
             }
         } else if race.started && !parked {
             FlightInput {
-                steer: axes.steer,
+                steer: (axes.steer + stick.steer).clamp(-1.0, 1.0),
                 throttle: axes.throttle,
-                pitch: axes.pitch,
+                pitch: (axes.pitch + stick.pitch).clamp(-1.0, 1.0),
                 boost: axes.boost,
+                lift: axes.up as i32 as f32 - axes.crouch as i32 as f32,
             }
         } else {
             FlightInput::default()
@@ -697,8 +735,9 @@ fn ai_input(
         *fi = FlightInput {
             steer: (-dyaw * 2.2).clamp(-1.0, 1.0),
             throttle,
-            pitch: ((alt_target - tf.translation.y) * 0.4).clamp(-1.0, 1.0),
+            pitch: ((alt_target - tf.translation.y) * 0.12).clamp(-1.0, 1.0),
             boost: gap < -0.5 && dyaw.abs() < 0.2,
+            lift: 0.0,
         };
     }
 }
@@ -819,8 +858,10 @@ pub(crate) fn integrate(
         let brake = (-input.throttle).max(0.0);
         // Quadratic drag tuned so terminal velocity == `top`.
         let drag = r.acceleration * (r.speed * r.speed) / (top * top);
-        r.speed += (accel * throttle - drag - brake * r.acceleration * 1.6 - 2.0) * dt;
-        r.speed = r.speed.clamp(0.0, top * 1.05);
+        // Gravity along the path: a dive gathers speed, a climb spends it.
+        let gravity = -9.8 * 0.6 * r.pitch.sin();
+        r.speed += (accel * throttle - drag - brake * r.acceleration * 1.6 - 2.0 + gravity) * dt;
+        r.speed = r.speed.clamp(0.0, top * 1.25);
 
         // --- yaw / roll --------------------------------------------------------
         let speed_t = (r.speed / r.top_speed).clamp(0.0, 1.0);
@@ -834,14 +875,31 @@ pub(crate) fn integrate(
         r.roll += (roll_target - r.roll) * (1.0 - (-7.0 * dt).exp());
 
         // --- pitch / altitude -------------------------------------------------
-        let pitch_target = input.pitch * 0.55;
-        r.pitch += (pitch_target - r.pitch) * (1.0 - (-6.0 * dt).exp());
+        // The nose eases towards the stick and levels itself when let go.
+        let here = terrain.0.surface(p.x, p.z);
+        let alt = p.y - here;
+        let thin = ((alt - THIN_AIR) / (MAX_ALT - THIN_AIR)).clamp(0.0, 1.0);
+        let mut pitch_target = input.pitch * 0.8;
+        if pitch_target > 0.0 {
+            pitch_target *= 1.0 - thin;
+        }
+        // Close to the ground the creature pulls up on its own.
+        if alt < min_alt + 3.0 && pitch_target < 0.0 {
+            pitch_target *= ((alt - min_alt) / 3.0).clamp(0.0, 1.0);
+        }
+        r.pitch += (pitch_target - r.pitch) * (1.0 - (-3.2 * dt).exp());
+        // Wingbeats: straight up or a folded drop, eased in and out.
+        let climb_target = if input.lift > 0.0 {
+            input.lift * CLIMB_RATE * (1.0 - thin)
+        } else {
+            input.lift * DROP_RATE
+        };
+        r.climb += (climb_target - r.climb) * (1.0 - (-3.0 * dt).exp());
 
         // --- integrate -----------------------------------------------------------
         let forward = Quat::from_rotation_y(r.yaw) * Vec3::NEG_Z;
         let mut v = forward * r.speed * r.pitch.cos();
-        v.y = r.speed * r.pitch.sin() * 0.6;
-        // Altitude is clamped softly: pushing into the limits bleeds pitch.
+        v.y = r.speed * r.pitch.sin() * 0.85 + r.climb;
         let mut next_pos = p + v * dt;
         let ground = terrain.0.surface(next_pos.x, next_pos.z);
         if next_pos.y < ground + min_alt {
@@ -849,12 +907,14 @@ pub(crate) fn integrate(
             if r.pitch < 0.0 {
                 r.pitch *= 0.3;
             }
+            r.climb = r.climb.max(0.0);
             // Dragging through the mud.
             r.speed *= 1.0 - 0.9 * dt;
         }
         if next_pos.y > ground + MAX_ALT {
             next_pos.y = ground + MAX_ALT;
             r.pitch = r.pitch.min(0.0);
+            r.climb = r.climb.min(0.0);
         }
 
         // --- reeds -------------------------------------------------------------
@@ -947,10 +1007,12 @@ pub(crate) fn integrate(
 
         vel.0 = (next_pos - p) / dt;
         tf.translation = next_pos;
-        tf.rotation = Quat::from_euler(EulerRot::YXZ, r.yaw, r.pitch * 0.7, r.roll);
+        // The body leans back when the wings lift it, forward on a drop.
+        let tilt = r.pitch * 0.8 + r.climb * 0.012;
+        tf.rotation = Quat::from_euler(EulerRot::YXZ, r.yaw, tilt, r.roll);
 
         // --- feel ---------------------------------------------------------------------------
-        flap.intensity = 0.35 + 0.65 * speed_t;
+        flap.intensity = (0.35 + 0.65 * speed_t + 0.4 * (r.climb / CLIMB_RATE).max(0.0)).min(1.0);
         if is_player {
             if let Ok(mut cam) = cams.single_mut() {
                 cam.roll = r.roll * 0.35;
@@ -1280,7 +1342,8 @@ pub struct RacingPlugin;
 
 impl Plugin for RacingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GamePhase::Racing), setup)
+        app.init_resource::<MouseStick>()
+            .add_systems(OnEnter(GamePhase::Racing), setup)
             .add_systems(OnExit(GamePhase::Racing), teardown)
             .add_systems(
                 Update,

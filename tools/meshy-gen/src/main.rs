@@ -137,6 +137,20 @@ fn parse_prompts(text: &str) -> Result<Vec<Spec>, String> {
         if !(100..=300_000).contains(&s.polycount) {
             return Err(format!("[{}] polycount must be 100–300000", s.name));
         }
+        // A character described as a rider comes back on a horse.
+        if s.pose.is_some() {
+            let p = s.prompt.to_ascii_lowercase();
+            if let Some(w) = ["rider", "riding", "horse", "mounted", "saddle"]
+                .iter()
+                .find(|w| p.contains(*w))
+            {
+                return Err(format!(
+                    "[{}] the word `{w}` makes Meshy model a mount with the character \
+                     (a horse): describe her without it",
+                    s.name
+                ));
+            }
+        }
         if s.animate.len() > 10 {
             return Err(format!("[{}] at most 10 animations per model", s.name));
         }

@@ -261,9 +261,11 @@ fn briefing(
              A mount that doesn't trust you will buck.",
             &[
                 ("W / S", "throttle / brake"),
-                ("A / D", "bank left / right"),
-                ("Q / E", "dive / climb"),
+                ("A / D · MOUSE", "bank · steer and pitch"),
+                ("Q / E", "nose down / up"),
+                ("SPACE / C", "beat up / fold and drop"),
                 ("SHIFT", "boost"),
+                ("V", "first / third person"),
             ],
         ),
         GamePhase::Explore => (
@@ -273,7 +275,9 @@ fn briefing(
              Fly through a veil to shift into another reality. Find the way home.",
             &[
                 ("W / S · A / D", "throttle · bank"),
-                ("Q / E · SHIFT", "dive / climb · boost"),
+                ("MOUSE · Q / E", "steer and pitch · nose down / up"),
+                ("SPACE / C · SHIFT", "beat up (hover) / drop · boost"),
+                ("V", "first / third person, flying or on foot"),
                 (
                     "F",
                     "land and get off · beside it: mount · far: whistle it over",
