@@ -1,0 +1,32 @@
+// Monolith — the carved face of an obelisk that floats over the marsh.
+// Tall (1:3): the 0–1 square sits in the middle and the carving runs on
+// above and below it. Animated: rings of light climb the face and loop.
+
+work Monolith {
+  let sides  = choose { 5 | 6 | 7 | 8 | 12 }
+  let lace   = ripples(x: 0.5, y: 0.5, count: choose { 7 | 11 | 16 }) * 0.55
+  let blade  = stripes(angle: ~between(10, 80), softness: 0.6) * 0.35
+  let petal  = blob(x: ~between(0.65, 0.8), y: 0.5, size: ~between(0.12, 0.24))
+  let carve  = kaleidoscope(warp(merge(lace, blade, petal), amount: 0.04), sides: sides)
+
+  // a second, smaller rose further up, and one below
+  let echo(cy) = kaleidoscope(merge(ripples(x: 0.5, y: cy, count: 6) * 0.5,
+                                    blob(x: 0.62, y: cy, size: 0.1)), sides: sides, x: 0.5, y: cy)
+  let column = merge(carve * circle(0.5, 0.5, 0.95, 0.03),
+                     echo(-0.55) * circle(0.5, -0.55, 0.6, 0.03),
+                     echo(1.55) * circle(0.5, 1.55, 0.6, 0.03))
+
+  // light climbing the face, looping with t
+  let climb = 0.5 + 0.5 * sin(y * 9 * tau / 3 + t * tau)
+  let veins = abs(noise(x * 6, y * 2, 0)) < 0.05
+
+  output column * (0.45 + 0.55 * climb) + veins * 0.35
+
+  // A fixed range: measuring it over the animation costs far more than drawing.
+  render video(output, duration: 4, fps: 12, width: 256, height: 768, format: "gif",
+               range: [0, 1.15],
+               palette: choose {
+                 ["#04030a", "#1d0b3a", "#6a2bb5", "#36e0c8", "#fff4d6"] |
+                 ["#050306", "#33081c", "#b8336a", "#ffb347", "#fff6e0"] |
+                 ["#020806", "#0b3d2e", "#1fd19b", "#d7ff6b", "#ffffff"] })
+}

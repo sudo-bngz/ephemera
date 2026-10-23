@@ -1,0 +1,28 @@
+// Veil — an aurora curtain hanging over the wetlands.
+// Painted on black: the game draws it additively, so black is clear sky.
+// The folds drift on a closed loop through the noise: the video loops.
+
+work Veil {
+  let folds  = choose { 6 | 9 | 12 }
+  let drift  = noise(x * 2.5 + 0.7 * cos(t * tau), y * 0.6, 0.7 * sin(t * tau))
+  let rays   = 0.5 + 0.5 * sin((x * folds + 1.6 * drift) * tau)
+  let fine   = 0.5 + 0.5 * sin((x * folds * 4.3 + 3 * drift) * tau)
+
+  // a bright hem low down that fades upwards, wavering
+  let hem    = 0.72 + 0.08 * noise(x * 3, 0, sin(t * tau))
+  let body   = smoothstep(0.05, hem, y) * (1 - smoothstep(hem, hem + 0.04, y))
+  let glow   = body ^ 2.2
+
+  // and the curtain thins out towards its ends (a 2:1 canvas shows x from
+  // −0.5 to 1.5: the 0–1 square sits in the middle)
+  let ends   = smoothstep(-0.5, 0.0, x) * (1 - smoothstep(1.0, 1.5, x))
+
+  output glow * ends * (0.35 + 0.45 * rays + 0.2 * fine)
+
+  render video(output, duration: 6, fps: 12, width: 512, height: 256, format: "gif",
+               range: [0, 1],
+               palette: choose {
+                 ["#000000", "#06302a", "#18c79a", "#b6ffd8", "#ffffff"] |
+                 ["#000000", "#2a0636", "#c13bd6", "#ffb3f0", "#ffffff"] |
+                 ["#000000", "#06183a", "#3b7bff", "#a8f0ff", "#ffffff"] })
+}

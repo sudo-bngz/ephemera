@@ -1,52 +1,76 @@
-//! Title screen: a slow orbit around a wild Ephemera resting in the marsh.
+//! Title screen: a slow orbit around a wild Ephemera resting by a monolith.
 
 use bevy::prelude::*;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 
+use crate::art::Art;
 use crate::camera::ChaseCamera;
 use crate::components::{CameraTarget, PhaseScoped};
 use crate::creature::{Coat, spawn_ephemera};
 use crate::hud::Hud;
 use crate::input::InputAxes;
 use crate::state::GamePhase;
-use crate::world::{Mood, WetlandAssets, WetlandsConfig, spawn_wetlands};
+use crate::terrain::Flatten;
+use crate::world::{Mood, WetlandAssets, WorldSetup, monolith, sigil, spawn_world};
+
+/// The world every new rite starts in (Explore picks a new one each time).
+pub const RITE_SEED: u64 = 7;
 
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut art: ResMut<Art>,
     assets: Res<WetlandAssets>,
     mut hud: ResMut<Hud>,
 ) {
-    let cam = spawn_wetlands(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &assets,
-        WetlandsConfig {
-            seed: 7,
-            half_size: 90.0,
-            reed_clumps: 110,
-            pools: 18,
-            spores: 90,
-            mood: Mood::Dusk,
-            clearing: 10.0,
-        },
-        &[],
-    );
+    let mut world = WorldSetup::new(RITE_SEED, Mood::Dusk);
+    world.flatten.push(Flatten {
+        centre: Vec2::ZERO,
+        radius: 22.0,
+        height: 1.5,
+    });
+    let (cam, terrain) = spawn_world(&mut commands, &mut meshes, &mut materials, &mut art, world);
     commands.entity(cam).insert(ChaseCamera {
         orbit: Some(0.12),
         ..default()
     });
 
+    let ground = terrain.surface(0.0, 0.0);
     spawn_ephemera(
         &mut commands,
         &mut meshes,
         &mut materials,
-        Vec3::new(0.0, 2.2, 0.0),
+        Vec3::new(0.0, ground + 2.2, 0.0),
         Coat::WILD,
         0.12,
         (PhaseScoped, CameraTarget::CAMP),
     );
+    // A monolith over a sigil, to set the tone from the first frame.
+    let mut rng = StdRng::seed_from_u64(RITE_SEED);
+    for e in [
+        monolith(
+            &mut commands,
+            &mut materials,
+            &mut art,
+            &assets,
+            &mut rng,
+            Vec3::new(-6.0, ground - 6.0, -26.0),
+            3,
+        ),
+        sigil(
+            &mut commands,
+            &mut materials,
+            &mut art,
+            &assets,
+            &mut rng,
+            Vec3::new(0.0, ground, 0.0),
+            5,
+        ),
+    ] {
+        commands.entity(e).insert(PhaseScoped);
+    }
 
     *hud = Hud {
         title: "E P H E M E R A".into(),
@@ -55,7 +79,7 @@ fn setup(
                find a wild Ephemera, make it hers, and race it at the Gathering."
             .into(),
         banner: "PRESS ENTER".into(),
-        footer: "ENTER — begin the rite      F3 — skip straight to the race      ESC — quit\n\
+        footer: "ENTER — begin the rite      F3 — race      F4 — explore the endless marsh      ESC — quit\n\
                  On foot: WASD move · C crouch · SHIFT sprint · SPACE throw net\n\
                  In flight: W/S throttle · A/D bank · Q/E dive & climb · SHIFT boost"
             .into(),

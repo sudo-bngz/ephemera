@@ -1,0 +1,23 @@
+// Orb — the skin of a sphere that drifts through the air, like a cell under glass.
+// Wrapped around a sphere: x is the longitude, so everything is computed on a
+// circle (cos, sin of x) and the seam disappears. Square canvas, so x runs
+// exactly once around.
+
+work Orb {
+  let r      = ~between(0.35, 0.6)
+  let u      = cos(x * tau) * r
+  let v      = sin(x * tau) * r
+  let marble = noise(u + 0.6 * noise(u * 1.5, v * 1.5, y), v, y * ~between(0.8, 1.6))
+  let bands  = 0.5 + 0.5 * sin((marble * choose { 1.5 | 2 | 3 } + t) * tau)
+  let cells  = smoothstep(0.035, 0.0, abs(noise(u * 2.5, v * 2.5, y * 3 + 0.5 * sin(t * tau))))
+  let poles  = smoothstep(0.0, 0.12, y) * (1 - smoothstep(0.88, 1.0, y))
+
+  output (bands * 0.75 + cells * 0.7) * (0.35 + 0.65 * poles)
+
+  render video(output, duration: 5, fps: 12, width: 256, height: 256, format: "gif",
+               range: [0, 1.2],
+               palette: choose {
+                 ["#0a0216", "#3a0c5e", "#e0457b", "#ffd36b"] |
+                 ["#01100e", "#0d5e57", "#7ef2c8", "#f4fff2"] |
+                 ["#100a02", "#5e3a0d", "#f2a97e", "#fff5ee"] })
+}

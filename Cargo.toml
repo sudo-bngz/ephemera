@@ -32,6 +32,9 @@ bevy = { version = "0.17", default-features = false, features = [
     "x11",
 ] }
 rand = "0.8"
+# The generative-art language that paints the world's landmarks at runtime.
+# Library only (no CLI, no rayon), pinned to a tested commit.
+alea = { package = "alea-lang", git = "https://github.com/sudo-bngz/alea", rev = "71c6553ed4c53817823bc373e5fc56354866d523", default-features = false }
 
 [features]
 default = []

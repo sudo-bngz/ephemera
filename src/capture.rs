@@ -10,13 +10,15 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::art::Art;
 use crate::camera::ChaseCamera;
 use crate::components::{CameraTarget, Ephemera, Judith, PhaseScoped, Velocity, spawn_judith};
 use crate::creature::{Coat, Flap, spawn_ephemera};
 use crate::hud::Hud;
 use crate::input::InputAxes;
 use crate::state::{EphemeraStats, GamePhase, RunLog};
-use crate::world::{Mood, Pool, ReedClump, WetlandAssets, WetlandsConfig, spawn_wetlands};
+use crate::terrain::{Flatten, SEA_LEVEL, Terrain};
+use crate::world::{Mood, ReedClump, WetlandAssets, WorldSetup, WorldTerrain, spawn_world};
 
 const NET_RANGE: f32 = 6.5;
 const SENSE_RANGE: f32 = 38.0;
@@ -50,8 +52,6 @@ struct Wild {
     /// Where it is heading when fleeing.
     target: Vec3,
     fleeing: bool,
-    /// Resting altitude.
-    rest_y: f32,
 }
 
 #[derive(Component)]
@@ -65,41 +65,39 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut art: ResMut<Art>,
     assets: Res<WetlandAssets>,
     mut hud: ResMut<Hud>,
     mut log: ResMut<RunLog>,
 ) {
-    spawn_wetlands(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &assets,
-        WetlandsConfig {
-            seed: 1984,
-            half_size: 110.0,
-            reed_clumps: 170,
-            pools: 26,
-            spores: 120,
-            mood: Mood::Dusk,
-            clearing: 0.0,
-        },
-        &[],
-    );
+    let start = Vec2::new(-60.0, 55.0);
+    let nest_xz = Vec2::new(38.0, -40.0);
+    let mut world = WorldSetup::new(1984, Mood::Dusk);
+    // Dry footing where Judith starts, and a little clearing for the nest.
+    for (centre, radius) in [(start, 6.0), (nest_xz, 8.0)] {
+        world.flatten.push(Flatten {
+            centre,
+            radius,
+            height: 1.2,
+        });
+    }
+    let (_, terrain) = spawn_world(&mut commands, &mut meshes, &mut materials, &mut art, world);
 
     let judith = spawn_judith(
         &mut commands,
         &mut meshes,
         &mut materials,
-        Vec3::new(-60.0, 0.0, 55.0),
+        Vec3::new(start.x, terrain.height(start.x, start.y), start.y),
     );
     commands.entity(judith).insert(CameraTarget::ON_FOOT);
 
-    let nest = Vec3::new(38.0, 2.0, -40.0);
+    let nest_ground = terrain.surface(nest_xz.x, nest_xz.y);
+    let nest = Vec3::new(nest_xz.x, nest_ground + 2.0, nest_xz.y);
     commands.spawn((
         PhaseScoped,
         Mesh3d(assets.pad_mesh.clone()),
         MeshMaterial3d(assets.pad_mat.clone()),
-        Transform::from_xyz(nest.x, 0.05, nest.z)
+        Transform::from_xyz(nest.x, nest_ground + 0.05, nest.z)
             .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
             .with_scale(Vec3::splat(5.0)),
     ));
@@ -115,7 +113,6 @@ fn setup(
             Wild {
                 target: nest,
                 fleeing: false,
-                rest_y: nest.y,
             },
         ),
     );
@@ -147,13 +144,18 @@ fn setup(
 
 /// The creature panics: pick a new resting place well away from Judith and
 /// start the flee flight. Shared by the awareness overflow and a failed net.
-fn spook(cap: &mut Capture, wild: &mut Wild, judith_pos: Vec3, log: &mut RunLog, message: &str) {
+fn spook(
+    cap: &mut Capture,
+    wild: &mut Wild,
+    terrain: &Terrain,
+    judith_pos: Vec3,
+    log: &mut RunLog,
+    message: &str,
+) {
     let a = cap.rng.gen_range(0.0..std::f32::consts::TAU);
     let r = cap.rng.gen_range(45.0..75.0);
     let mut target = judith_pos + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
-    target.x = target.x.clamp(-100.0, 100.0);
-    target.z = target.z.clamp(-100.0, 100.0);
-    target.y = wild.rest_y;
+    target.y = terrain.surface(target.x, target.z) + 2.0;
     wild.target = target;
     wild.fleeing = true;
     cap.stage = Stage::Spooked(2.6);
@@ -170,6 +172,7 @@ fn move_judith(
     time: Res<Time>,
     axes: Res<InputAxes>,
     cap: Res<Capture>,
+    terrain: Res<WorldTerrain>,
     mut q: Query<(&mut Transform, &mut Velocity), With<Judith>>,
 ) {
     let Ok((mut tf, mut vel)) = q.single_mut() else {
@@ -195,9 +198,9 @@ fn move_judith(
     // Snappy but not instant: a short acceleration ramp.
     vel.0 = vel.0.lerp(wanted, 1.0 - (-14.0 * dt).exp());
     tf.translation += vel.0 * dt;
-    tf.translation.x = tf.translation.x.clamp(-125.0, 125.0);
-    tf.translation.z = tf.translation.z.clamp(-125.0, 125.0);
-    tf.translation.y = 0.0;
+    // Walk on the ground; wade (waist-deep at most) through the pools.
+    let g = terrain.0.height(tf.translation.x, tf.translation.z);
+    tf.translation.y = g.max(SEA_LEVEL - 0.6);
 }
 
 fn sense(
@@ -207,7 +210,7 @@ fn sense(
     judith: Query<(&Transform, &Velocity), With<Judith>>,
     mut creature: Query<(&Transform, &mut Flap, &mut Wild), With<Ephemera>>,
     reeds: Query<(&GlobalTransform, &ReedClump)>,
-    pools: Query<(&GlobalTransform, &Pool)>,
+    terrain: Res<WorldTerrain>,
     mut log: ResMut<RunLog>,
 ) {
     let Ok((jtf, jvel)) = judith.single() else {
@@ -223,9 +226,7 @@ fn sense(
     let in_cover = reeds
         .iter()
         .any(|(t, r)| (t.translation() - jp).xz().length() < r.radius);
-    let in_pool = pools
-        .iter()
-        .any(|(t, p)| (t.translation() - jp).xz().length() < p.radius);
+    let in_pool = terrain.0.is_water(jp.x, jp.z);
 
     let moving = jvel.0.length() > 0.3;
     let mut noise = match (moving, axes.crouch, axes.boost) {
@@ -256,6 +257,7 @@ fn sense(
             spook(
                 &mut cap,
                 &mut wild,
+                &terrain.0,
                 jp,
                 &mut log,
                 "SPOOKED — it bolts into the dusk",
@@ -332,6 +334,7 @@ fn resolve(
     mut creature: Query<(&mut Transform, &mut Wild), (With<Ephemera>, Without<Judith>)>,
     mut cams: Query<&mut ChaseCamera>,
     mut stats: ResMut<EphemeraStats>,
+    terrain: Res<WorldTerrain>,
 ) {
     let dt = time.delta_secs();
     let Ok((mut etf, mut wild)) = creature.single_mut() else {
@@ -349,7 +352,9 @@ fn resolve(
             let dir = to.normalize_or_zero();
             let speed = 26.0;
             etf.translation += dir * speed * dt;
-            etf.translation.y = wild.rest_y + (dist / 60.0).min(1.0) * 10.0;
+            // Skim the ground on the way, rising mid-flight.
+            let ground = terrain.0.surface(etf.translation.x, etf.translation.z);
+            etf.translation.y = (ground + 2.0).max(wild.target.y) + (dist / 60.0).min(1.0) * 10.0;
             let yaw = (-dir.x).atan2(-dir.z);
             etf.rotation = etf
                 .rotation
@@ -387,6 +392,7 @@ fn resolve(
                     spook(
                         &mut cap,
                         &mut wild,
+                        &terrain.0,
                         jp,
                         &mut log,
                         "It saw the net coming — SPOOKED",

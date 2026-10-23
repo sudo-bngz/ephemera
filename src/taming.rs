@@ -11,15 +11,19 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::art::Art;
 use crate::camera::ChaseCamera;
 use crate::components::{CameraTarget, Ephemera, Judith, PhaseScoped, spawn_judith};
 use crate::creature::{Coat, Flap, spawn_ephemera};
 use crate::hud::Hud;
 use crate::input::InputAxes;
 use crate::state::{EphemeraStats, GamePhase, RunLog};
-use crate::world::{Mood, WetlandAssets, WetlandsConfig, spawn_wetlands};
+use crate::terrain::Flatten;
+use crate::world::{Mood, WorldSetup, spawn_world};
 
 pub const DAWNS: u32 = 7;
+/// Height of the flattened camp clearing.
+const CAMP_GROUND: f32 = 1.5;
 const MIN_DAWNS_BEFORE_RACE: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,25 +75,18 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    assets: Res<WetlandAssets>,
+    mut art: ResMut<Art>,
     mut hud: ResMut<Hud>,
 ) {
-    let cam = spawn_wetlands(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &assets,
-        WetlandsConfig {
-            seed: 311,
-            half_size: 80.0,
-            reed_clumps: 90,
-            pools: 14,
-            spores: 40,
-            mood: Mood::Dawn,
-            clearing: 14.0,
-        },
-        &[],
-    );
+    // The camp: a flat, dry clearing.
+    let ground = CAMP_GROUND;
+    let mut world = WorldSetup::new(311, Mood::Dawn);
+    world.flatten.push(Flatten {
+        centre: Vec2::ZERO,
+        radius: 24.0,
+        height: ground,
+    });
+    let (cam, _) = spawn_world(&mut commands, &mut meshes, &mut materials, &mut art, world);
     commands.entity(cam).insert(ChaseCamera {
         orbit: Some(0.08),
         ..default()
@@ -110,13 +107,13 @@ fn setup(
         PhaseScoped,
         Mesh3d(meshes.add(Cylinder::new(0.18, 3.0))),
         MeshMaterial3d(wood.clone()),
-        Transform::from_xyz(0.0, 1.5, 0.0),
+        Transform::from_xyz(0.0, ground + 1.5, 0.0),
     ));
     commands.spawn((
         PhaseScoped,
         Mesh3d(meshes.add(Cone::new(2.6, 3.2))),
         MeshMaterial3d(hide),
-        Transform::from_xyz(-7.0, 1.6, 4.0),
+        Transform::from_xyz(-7.0, ground + 1.6, 4.0),
     ));
     // A ring of nectar gourds, purely decorative.
     for i in 0..5 {
@@ -125,7 +122,7 @@ fn setup(
             PhaseScoped,
             Mesh3d(meshes.add(Sphere::new(0.4).mesh().ico(2).unwrap())),
             MeshMaterial3d(wood.clone()),
-            Transform::from_xyz(-5.5 + a.cos() * 1.5, 0.4, 7.5 + a.sin() * 1.5),
+            Transform::from_xyz(-5.5 + a.cos() * 1.5, ground + 0.4, 7.5 + a.sin() * 1.5),
         ));
     }
 
@@ -133,10 +130,10 @@ fn setup(
         &mut commands,
         &mut meshes,
         &mut materials,
-        Vec3::new(-3.0, 0.0, 2.5),
+        Vec3::new(-3.0, ground, 2.5),
     );
 
-    let post = Vec3::new(0.0, 2.2, 0.0);
+    let post = Vec3::new(0.0, ground + 2.2, 0.0);
     spawn_ephemera(
         &mut commands,
         &mut meshes,
@@ -339,9 +336,9 @@ fn play(
             Stage::Playing {
                 action: Action::Feed,
                 ..
-            } => etf.translation.with_y(0.0) + Vec3::new(0.0, 0.0, 2.6),
+            } => etf.translation.with_y(CAMP_GROUND) + Vec3::new(0.0, 0.0, 2.6),
             Stage::Departing(_) => etf.translation + Vec3::new(0.0, 0.9, 0.0),
-            _ => Vec3::new(-3.0, 0.0, 2.5),
+            _ => Vec3::new(-3.0, CAMP_GROUND, 2.5),
         };
         jtf.translation = jtf.translation.lerp(wanted, 1.0 - (-3.0 * dt).exp());
         let to = (etf.translation - jtf.translation).xz();

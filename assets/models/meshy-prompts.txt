@@ -1,0 +1,53 @@
+# Prompts for tools/meshy-gen. One [section] per model slot.
+#
+#   prompt     what to build (≤ 800 characters); indent to continue a line
+#   texture    optional, guides the texturing pass separately from the shape
+#   polycount  triangle budget after remesh (100–300000)
+#   pose       t-pose / a-pose for characters you may rig later
+#
+# The reeds are instanced ~450 times in a race: keep them light.
+
+[ephemera]
+polycount = 25000
+prompt = giant alien mosquito used as a riding mount, elongated slender body,
+  long thin jointed legs hanging down, four large translucent veined wings
+  spread flat and horizontal, long thin proboscis pointing forward, big
+  compound eyes, a small woven saddle on the thorax, stylized game asset,
+  clean readable silhouette, facing forward
+texture = iridescent dark violet chitin with oil-slick sheen, glowing teal
+  compound eyes, wings clear and faintly veined, saddle of woven ochre reed
+
+[judith]
+polycount = 15000
+pose = t-pose
+prompt = young woman tribal rider, lean and athletic, wrapped leather clothing,
+  hair tied in a high bun, a hunting net slung across her back, bare
+  forearms, sturdy sandals, stylized game character, full body
+texture = ochre, rust and bone coloured cloth and leather, painted teal marks
+  on the forearms and cheeks, dark brown hair
+
+[reed_tall]
+polycount = 2500
+prompt = clump of tall alien marsh reeds bundled at the base, thin straight
+  stalks of different heights fanning slightly outwards, stylized low poly
+  game asset
+texture = violet and indigo stalks with softly glowing cyan tips
+
+[reed]
+polycount = 1500
+prompt = small dense clump of short alien marsh grass, stylized low poly
+  game asset
+texture = sage green blades turning lilac at the tips
+
+[gate]
+polycount = 8000
+prompt = tribal racing gate, two tall carved bone totems joined at the top by
+  a woven arch, feathers and glass beads hanging from the arch, wide open
+  centre, stylized game asset
+texture = weathered bone white, woven ochre reed, glowing turquoise beads
+
+[mesa]
+polycount = 3000
+prompt = weathered alien rock spire with layered sediment bands and a flat
+  top, tall and narrow, stylized low poly
+texture = dusty mauve and rose sandstone layers

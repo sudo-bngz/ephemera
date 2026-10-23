@@ -1,0 +1,24 @@
+// Sigil — a glowing circle in the mud. Nobody in the tribe knows who draws them.
+// Painted on black for additive blending.
+
+work Sigil {
+  let spokes = choose { 3 | 4 | 5 | 6 | 8 | 9 }
+  let hand   = merge(
+    line(0.5, 0.5, 0.97, 0.5, width: 0.006),
+    ring(x: ~between(0.68, 0.84), y: 0.5, size: ~between(0.08, 0.2), width: 0.008),
+    circle(x: ~between(0.6, 0.92), y: ~between(0.45, 0.5), size: ~between(0.02, 0.05)),
+    line(~between(0.6, 0.8), 0.5, 0.92, ~between(0.4, 0.47), width: 0.005))
+  let rose   = kaleidoscope(hand, sides: spokes * 2)
+  let rims   = merge(ring(0.5, 0.5, 0.97, 0.012),
+                     ring(0.5, 0.5, ~between(0.3, 0.6), 0.007),
+                     ring(0.5, 0.5, ~between(0.12, 0.25), 0.005))
+  let dust   = scatter(count: 120, size: 0.0035) * circle(0.5, 0.5, 0.9, 0.05)
+
+  output merge(rose, rims, dust * 0.8) * circle(0.5, 0.5, 1.0, 0.01)
+
+  render image(output, width: 512, range: [0, 1],
+               palette: choose {
+                 ["#000000", "#0b4a44", "#3df5d2", "#ffffff"] |
+                 ["#000000", "#4a1b0b", "#ff8a3d", "#fff3c4"] |
+                 ["#000000", "#2b0b4a", "#b06bff", "#ffffff"] })
+}

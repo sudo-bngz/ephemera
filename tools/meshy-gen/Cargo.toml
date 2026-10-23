@@ -1,0 +1,13 @@
+[package]
+name = "meshy-gen"
+version = "0.1.0"
+edition = "2024"
+description = "Generates Ephemera's GLB models with the Meshy text-to-3D API"
+publish = false
+
+# Standalone: not part of the game's build.
+[workspace]
+
+[dependencies]
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"

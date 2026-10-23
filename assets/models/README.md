@@ -39,6 +39,16 @@ it picks up.
 
 ## Generating with meshy.ai
 
+**Automatically:** `tools/meshy-gen` drives the Meshy API for every slot, using the
+prompts in `meshy-prompts.txt`:
+
+```sh
+export MESHY_API_KEY=msy_...
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml
+```
+
+**By hand**, in the web app:
+
 1. Use **Text to 3D** (or Image to 3D if you have concept art).
 2. **Remesh** before downloading: it's free and lets you pick a face count.
    Budgets that keep the game fast:

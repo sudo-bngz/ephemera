@@ -18,21 +18,25 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::art::Art;
 use crate::camera::ChaseCamera;
 use crate::components::{CameraTarget, PhaseScoped, Velocity};
 use crate::creature::{Coat, Flap, spawn_ephemera};
 use crate::hud::Hud;
 use crate::input::InputAxes;
 use crate::state::{EphemeraStats, GamePhase, RunLog};
+use crate::terrain::SEA_LEVEL;
 use crate::world::{
-    Mood, Pool, ReedClump, WetlandAssets, WetlandsConfig, spawn_reed_clump, spawn_wetlands,
+    Mood, Obstacle, ReedClump, WetlandAssets, WorldSetup, WorldTerrain, spawn_reed_clump,
+    spawn_world,
 };
 
 pub const LAPS: u32 = 3;
 const GATE_RADIUS: f32 = 8.0;
 const GATE_HEIGHT: f32 = 11.0;
+/// Flight altitude limits, above the ground (or the water) below.
 const MIN_ALT: f32 = 1.0;
-const MAX_ALT: f32 = 34.0;
+const MAX_ALT: f32 = 40.0;
 const COUNTDOWN: f32 = 3.6;
 const SPEED_LINES: usize = 56;
 
@@ -148,7 +152,7 @@ pub struct Racer {
 }
 
 #[derive(Component)]
-struct Player;
+pub(crate) struct Player;
 
 #[derive(Component)]
 struct Ai {
@@ -169,13 +173,34 @@ struct SpeedLine {
 }
 
 #[derive(Resource)]
-struct Race {
+pub(crate) struct Race {
     clock: f32,
     started: bool,
     finish_timer: Option<f32>,
     rng: StdRng,
     gate_idle: Handle<StandardMaterial>,
     gate_next: Handle<StandardMaterial>,
+}
+
+impl Rider {
+    /// Boost left, 0–1.
+    pub(crate) fn boost_fraction(&self) -> f32 {
+        (self.boost / self.boost_max).clamp(0.0, 1.0)
+    }
+}
+
+impl Race {
+    /// No countdown, no gates: the flight model running free.
+    pub(crate) fn free_flight(seed: u64) -> Self {
+        Self {
+            clock: 10.0,
+            started: true,
+            finish_timer: None,
+            rng: StdRng::seed_from_u64(seed),
+            gate_idle: Handle::default(),
+            gate_next: Handle::default(),
+        }
+    }
 }
 
 const RIVALS: [(&str, f32, Coat); 3] = [
@@ -209,27 +234,20 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut art: ResMut<Art>,
     assets: Res<WetlandAssets>,
     stats: Res<EphemeraStats>,
     mut hud: ResMut<Hud>,
 ) {
-    let track = Track::generate(777);
-    let cam = spawn_wetlands(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &assets,
-        WetlandsConfig {
-            seed: 2026,
-            half_size: 230.0,
-            reed_clumps: 320,
-            pools: 60,
-            spores: 160,
-            mood: Mood::Noon,
-            clearing: 0.0,
-        },
-        &track.points,
-    );
+    let mut track = Track::generate(777);
+    let mut world = WorldSetup::new(2026, Mood::Noon);
+    world.keep_clear = track.points.clone();
+    world.keep_clear_radius = 20.0;
+    let (cam, terrain) = spawn_world(&mut commands, &mut meshes, &mut materials, &mut art, world);
+    // Gates stand on the ground (or on the water) wherever they fall.
+    for g in &mut track.gates {
+        g.y = terrain.surface(g.x, g.z);
+    }
     commands.entity(cam).insert(ChaseCamera {
         base_fov: 64f32.to_radians(),
         fov_gain: 30f32.to_radians(),
@@ -239,43 +257,21 @@ fn setup(
 
     let mut rng = StdRng::seed_from_u64(5);
 
-    // Line the track with reed beds so the ground reads as rushing past,
-    // and put tall clumps *on* the racing line as obstacles.
+    // Tall clumps *on* the racing line, as deliberate obstacles.
     for (i, p) in track.points.iter().enumerate() {
         let next = track.points[(i + 1) % track.points.len()];
         let dir = (next - *p).normalize_or(Vec3::X);
         let side = Vec3::new(-dir.z, 0.0, dir.x);
-        if i % 3 == 0 {
-            for s in [-1.0, 1.0] {
-                let off = 16.0 + rng.gen_range(0.0..10.0);
-                let (radius, height) = (rng.gen_range(2.0..4.0), rng.gen_range(3.0..6.0));
-                spawn_reed_clump(
-                    &mut commands,
-                    &assets,
-                    &mut rng,
-                    *p + side * s * off,
-                    radius,
-                    height,
-                    false,
-                );
-            }
-        }
         let near_gate = track
             .gates
             .iter()
             .any(|g| (g.xz() - p.xz()).length() < 28.0);
         if i % 29 == 11 && !near_gate {
             let off = rng.gen_range(-6.0..6.0);
+            let at = *p + side * off;
+            let at = at.with_y(terrain.surface(at.x, at.z));
             let (radius, height) = (rng.gen_range(2.5..3.5), rng.gen_range(9.0..13.0));
-            spawn_reed_clump(
-                &mut commands,
-                &assets,
-                &mut rng,
-                *p + side * off,
-                radius,
-                height,
-                true,
-            );
+            spawn_reed_clump(&mut commands, &assets, &mut rng, at, radius, height, true);
         }
     }
 
@@ -333,49 +329,21 @@ fn setup(
     let dir = track.gate_dirs[0];
     let side = Vec3::new(-dir.z, 0.0, dir.x);
     let yaw0 = (-dir.x).atan2(-dir.z);
-    let grid =
-        |slot: f32| start - dir * (14.0 + slot.abs() * 4.0) + side * slot * 6.0 + Vec3::Y * 3.0;
+    let grid = |slot: f32| {
+        let p = start - dir * (14.0 + slot.abs() * 4.0) + side * slot * 6.0;
+        p.with_y(terrain.surface(p.x, p.z) + 3.0)
+    };
 
     // Player.
-    let player = spawn_ephemera(
+    let player = spawn_player_rider(
         &mut commands,
         &mut meshes,
         &mut materials,
         grid(-0.5),
-        Coat::WILD,
-        0.4,
-        (
-            PhaseScoped,
-            Player,
-            CameraTarget::FLIGHT,
-            Velocity::default(),
-            FlightInput::default(),
-            Rider {
-                speed: 0.0,
-                yaw: yaw0,
-                pitch: 0.0,
-                roll: 0.0,
-                top_speed: stats.top_speed(),
-                acceleration: stats.acceleration(),
-                yaw_rate: stats.yaw_rate(),
-                boost: stats.boost_capacity(),
-                boost_max: stats.boost_capacity(),
-                trust: stats.trust,
-                buck: 0.0,
-                buck_dir: 1.0,
-                bump_cooldown: 0.0,
-            },
-            Racer::new("Judith"),
-        ),
+        yaw0,
+        &stats,
     );
-    // Judith in the saddle.
-    let saddle =
-        crate::components::spawn_judith(&mut commands, &mut meshes, &mut materials, Vec3::ZERO);
-    commands
-        .entity(saddle)
-        .remove::<Velocity>()
-        .insert(Transform::from_xyz(0.0, 0.55, -0.6).with_scale(Vec3::splat(0.9)))
-        .insert(ChildOf(player));
+    commands.entity(player).insert(Racer::new("Judith"));
 
     // Rivals.
     for (i, (name, skill, coat)) in RIVALS.iter().enumerate() {
@@ -416,32 +384,7 @@ fn setup(
         );
     }
 
-    // Speed lines: thin streaks parented to nothing; positioned relative to
-    // the camera every frame.
-    let streak = meshes.add(Cuboid::new(0.03, 0.03, 3.5));
-    let streak_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(1.0, 1.0, 1.0, 0.0),
-        emissive: LinearRgba::new(2.0, 2.0, 2.0, 1.0),
-        alpha_mode: AlphaMode::Blend,
-        unlit: true,
-        ..default()
-    });
-    for _ in 0..SPEED_LINES {
-        let a = rng.gen_range(0.0..std::f32::consts::TAU);
-        let r = rng.gen_range(2.0_f32..7.0);
-        commands.spawn((
-            PhaseScoped,
-            SpeedLine {
-                depth: rng.gen_range(2.0..40.0),
-                off: Vec2::new(a.cos() * r, a.sin() * r * 0.7),
-            },
-            Mesh3d(streak.clone()),
-            MeshMaterial3d(streak_mat.clone()),
-            Transform::default(),
-            Visibility::Hidden,
-            NotShadowCaster,
-        ));
-    }
+    spawn_speed_lines(&mut commands, &mut meshes, &mut materials, &mut rng);
 
     commands.insert_resource(track);
     commands.insert_resource(Race {
@@ -476,6 +419,89 @@ impl Racer {
             progress: 0.0,
             place: 1,
         }
+    }
+}
+
+/// Judith on her Ephemera, flown by the player. Shared by the race and
+/// free flight (Explore).
+pub(crate) fn spawn_player_rider(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    at: Vec3,
+    yaw: f32,
+    stats: &EphemeraStats,
+) -> Entity {
+    let player = spawn_ephemera(
+        commands,
+        meshes,
+        materials,
+        at,
+        Coat::WILD,
+        0.4,
+        (
+            PhaseScoped,
+            Player,
+            CameraTarget::FLIGHT,
+            Velocity::default(),
+            FlightInput::default(),
+            Rider {
+                speed: 0.0,
+                yaw,
+                pitch: 0.0,
+                roll: 0.0,
+                top_speed: stats.top_speed(),
+                acceleration: stats.acceleration(),
+                yaw_rate: stats.yaw_rate(),
+                boost: stats.boost_capacity(),
+                boost_max: stats.boost_capacity(),
+                trust: stats.trust,
+                buck: 0.0,
+                buck_dir: 1.0,
+                bump_cooldown: 0.0,
+            },
+        ),
+    );
+    // Judith in the saddle.
+    let saddle = crate::components::spawn_judith(commands, meshes, materials, Vec3::ZERO);
+    commands
+        .entity(saddle)
+        .remove::<Velocity>()
+        .insert(Transform::from_xyz(0.0, 0.55, -0.6).with_scale(Vec3::splat(0.9)))
+        .insert(ChildOf(player));
+    player
+}
+
+/// Thin streaks positioned relative to the camera every frame.
+pub(crate) fn spawn_speed_lines(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    rng: &mut StdRng,
+) {
+    let streak = meshes.add(Cuboid::new(0.03, 0.03, 3.5));
+    let streak_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(1.0, 1.0, 1.0, 0.0),
+        emissive: LinearRgba::new(2.0, 2.0, 2.0, 1.0),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+    for _ in 0..SPEED_LINES {
+        let a = rng.gen_range(0.0..std::f32::consts::TAU);
+        let r = rng.gen_range(2.0_f32..7.0);
+        commands.spawn((
+            PhaseScoped,
+            SpeedLine {
+                depth: rng.gen_range(2.0..40.0),
+                off: Vec2::new(a.cos() * r, a.sin() * r * 0.7),
+            },
+            Mesh3d(streak.clone()),
+            MeshMaterial3d(streak_mat.clone()),
+            Transform::default(),
+            Visibility::Hidden,
+            NotShadowCaster,
+        ));
     }
 }
 
@@ -518,6 +544,8 @@ fn ai_input(
     player: Query<&Racer, With<Player>>,
     mut q: Query<(&Transform, &Rider, &mut Ai, &Racer, &mut FlightInput), Without<Player>>,
     reeds: Query<(&GlobalTransform, &ReedClump)>,
+    obstacles: Query<(&GlobalTransform, &Obstacle)>,
+    terrain: Res<WorldTerrain>,
 ) {
     let player_progress = player.single().map(|r| r.progress).unwrap_or(0.0);
     for (tf, rider, mut ai, racer, mut fi) in &mut q {
@@ -547,17 +575,28 @@ fn ai_input(
         // obstacle that sits close to the line between here and the target.
         let fwd = (target - tf.translation).normalize_or(dir);
         let fwd_side = Vec3::new(-fwd.z, 0.0, fwd.x);
-        for (rt, reed) in &reeds {
-            if !reed.solid {
-                continue;
-            }
-            let rel = rt.translation() - tf.translation;
+        let y = tf.translation.y;
+        let solids = reeds
+            .iter()
+            .filter(|(rt, r)| r.solid && y < rt.translation().y + r.height + 1.0)
+            .map(|(rt, r)| (rt.translation(), r.radius))
+            .chain(
+                obstacles
+                    .iter()
+                    .filter(|(ot, o)| {
+                        let oy = ot.translation().y;
+                        y > oy - o.below - 1.5 && y < oy + o.above + 1.5
+                    })
+                    .map(|(ot, o)| (ot.translation(), o.radius)),
+            );
+        for (centre, radius) in solids {
+            let rel = (centre - tf.translation).with_y(0.0);
             let along = rel.dot(fwd);
             if !(0.0..45.0).contains(&along) {
                 continue;
             }
             let lateral = rel.dot(fwd_side);
-            let clearance = reed.radius + 6.0;
+            let clearance = radius + 6.0;
             if lateral.abs() < clearance {
                 let away = if lateral >= 0.0 { -1.0 } else { 1.0 };
                 target += fwd_side * away * (clearance - lateral.abs()) * 1.5;
@@ -582,7 +621,13 @@ fn ai_input(
         } else {
             0.9
         };
-        let alt_target = 4.5;
+        // Follow the ground, climbing early for rises ahead.
+        let probe = tf.translation + fwd * 30.0;
+        let alt_target = terrain
+            .0
+            .surface(tf.translation.x, tf.translation.z)
+            .max(terrain.0.surface(probe.x, probe.z))
+            + 4.5;
         *fi = FlightInput {
             steer: (-dyaw * 2.2).clamp(-1.0, 1.0),
             throttle,
@@ -605,7 +650,8 @@ fn integrate(
         Option<&Player>,
     )>,
     mut reeds: Query<(&GlobalTransform, &mut ReedClump)>,
-    pools: Query<(&GlobalTransform, &Pool)>,
+    obstacles: Query<(&GlobalTransform, &Obstacle)>,
+    terrain: Res<WorldTerrain>,
 ) {
     let dt = time.delta_secs().min(1.0 / 30.0);
     // The first frame of the app (e.g. `--race`) has a zero delta: there is
@@ -640,10 +686,7 @@ fn integrate(
         }
 
         // --- terrain modifiers ---------------------------------------------
-        let over_pool = pools
-            .iter()
-            .any(|(t, pool)| (t.translation().xz() - p.xz()).length() < pool.radius);
-        let skimming = over_pool && p.y < 2.6;
+        let skimming = terrain.0.is_water(p.x, p.z) && p.y < SEA_LEVEL + 2.6;
 
         // --- longitudinal ----------------------------------------------------
         let top =
@@ -681,16 +724,17 @@ fn integrate(
         v.y = r.speed * r.pitch.sin() * 0.6;
         // Altitude is clamped softly: pushing into the limits bleeds pitch.
         let mut next_pos = p + v * dt;
-        if next_pos.y < MIN_ALT {
-            next_pos.y = MIN_ALT;
+        let ground = terrain.0.surface(next_pos.x, next_pos.z);
+        if next_pos.y < ground + MIN_ALT {
+            next_pos.y = ground + MIN_ALT;
             if r.pitch < 0.0 {
                 r.pitch *= 0.3;
             }
             // Dragging through the mud.
             r.speed *= 1.0 - 0.9 * dt;
         }
-        if next_pos.y > MAX_ALT {
-            next_pos.y = MAX_ALT;
+        if next_pos.y > ground + MAX_ALT {
+            next_pos.y = ground + MAX_ALT;
             r.pitch = r.pitch.min(0.0);
         }
 
@@ -710,7 +754,8 @@ fn integrate(
             let rel = next_pos.xz() - rt.translation().xz();
             let d = rel.length();
             let reach = reed.radius + 4.0;
-            if d > reach || next_pos.y > reed.height + 3.0 {
+            let top = rt.translation().y + reed.height;
+            if d > reach || next_pos.y > top + 3.0 {
                 continue;
             }
             // Bend away from the rider and along its path.
@@ -720,11 +765,29 @@ fn integrate(
                 reed.shove(dir, strength * 14.0 * dt);
             }
             let hit_radius = reed.radius + 1.2;
-            if d >= hit_radius || next_pos.y >= reed.height + 0.5 {
+            if d >= hit_radius || next_pos.y >= top + 0.5 {
                 continue;
             }
             if !reed.solid {
                 in_soft = true;
+                continue;
+            }
+            let n = rel.normalize_or(-travel);
+            let pen = hit_radius - d;
+            push += n * pen;
+            lift = lift.max((pen / 1.2).min(1.0));
+            head_on = head_on.max((-travel.dot(n)).max(0.0));
+        }
+        // Mushrooms, crystals, bone feet, monoliths, orbs: always solid.
+        for (ot, o) in &obstacles {
+            let c = ot.translation();
+            if next_pos.y < c.y - o.below - 0.5 || next_pos.y > c.y + o.above + 0.5 {
+                continue;
+            }
+            let rel = next_pos.xz() - c.xz();
+            let hit_radius = o.radius + 1.2;
+            let d = rel.length();
+            if d >= hit_radius {
                 continue;
             }
             let n = rel.normalize_or(-travel);
@@ -749,7 +812,7 @@ fn integrate(
                 r.yaw += wrap_angle(target - r.yaw) * (1.0 - (-10.0 * dt).exp());
             }
             // Flutter up and over — also the guaranteed way out of any wedge.
-            next_pos.y = (next_pos.y + lift * 9.0 * dt).min(MAX_ALT);
+            next_pos.y = (next_pos.y + lift * 9.0 * dt).min(ground + MAX_ALT);
             if r.bump_cooldown <= 0.0 {
                 r.speed *= 1.0 - (0.10 + 0.30 * head_on);
                 r.bump_cooldown = 0.5;
@@ -806,7 +869,8 @@ fn gates(
         }
         let g = track.gates[racer.next_gate];
         let d = (g.xz() - tf.translation.xz()).length();
-        if d < GATE_RADIUS && tf.translation.y < GATE_HEIGHT {
+        let above = tf.translation.y - g.y;
+        if d < GATE_RADIUS && (-2.0..GATE_HEIGHT).contains(&above) {
             racer.next_gate = (racer.next_gate + 1) % n;
             if racer.next_gate == 0 {
                 let lap_time = race.clock - racer.lap_start;
@@ -1009,27 +1073,18 @@ fn results_setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    assets: Res<WetlandAssets>,
+    mut art: ResMut<Art>,
     log: Res<RunLog>,
     stats: Res<EphemeraStats>,
     mut hud: ResMut<Hud>,
 ) {
-    let cam = spawn_wetlands(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &assets,
-        WetlandsConfig {
-            seed: 9,
-            half_size: 80.0,
-            reed_clumps: 90,
-            pools: 16,
-            spores: 100,
-            mood: Mood::Dusk,
-            clearing: 10.0,
-        },
-        &[],
-    );
+    let mut world = WorldSetup::new(9, Mood::Dusk);
+    world.flatten.push(crate::terrain::Flatten {
+        centre: Vec2::ZERO,
+        radius: 18.0,
+        height: 1.5,
+    });
+    let (cam, _) = spawn_world(&mut commands, &mut meshes, &mut materials, &mut art, world);
     commands.entity(cam).insert(ChaseCamera {
         orbit: Some(0.15),
         ..default()
@@ -1038,7 +1093,7 @@ fn results_setup(
         &mut commands,
         &mut meshes,
         &mut materials,
-        Vec3::new(0.0, 2.2, 0.0),
+        Vec3::new(0.0, 3.7, 0.0),
         Coat::WILD,
         0.1,
         (PhaseScoped, CameraTarget::CAMP),
@@ -1105,25 +1160,28 @@ impl Plugin for RacingPlugin {
             .add_systems(OnExit(GamePhase::Racing), teardown)
             .add_systems(
                 Update,
+                // The flight model runs in the race and in free flight; the
+                // race's own rules (AI, gates, placings) only in the race.
                 (
                     clock,
                     player_input,
-                    ai_input,
+                    ai_input.run_if(in_state(GamePhase::Racing)),
                     integrate,
-                    gates,
-                    placings,
-                    finish,
+                    (gates, placings, finish).run_if(in_state(GamePhase::Racing)),
                 )
                     .chain()
                     .in_set(crate::GameSet::Simulation)
-                    .run_if(in_state(GamePhase::Racing)),
+                    .run_if(in_state(GamePhase::Racing).or(in_state(GamePhase::Explore))),
             )
             .add_systems(
                 Update,
-                (speed_lines, highlight_gates)
+                (
+                    speed_lines
+                        .run_if(in_state(GamePhase::Racing).or(in_state(GamePhase::Explore))),
+                    highlight_gates.run_if(in_state(GamePhase::Racing)),
+                )
                     .after(crate::camera::follow)
-                    .in_set(crate::GameSet::Camera)
-                    .run_if(in_state(GamePhase::Racing)),
+                    .in_set(crate::GameSet::Camera),
             )
             .add_systems(
                 Update,

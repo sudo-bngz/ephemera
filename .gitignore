@@ -1,3 +1,7 @@
 /target
+tools/*/target
 **/*.rs.bk
 .DS_Store
+# meshy-gen resume state and partial downloads
+assets/models/.meshy-tasks
+*.glb.part

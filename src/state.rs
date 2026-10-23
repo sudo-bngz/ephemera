@@ -16,6 +16,11 @@ pub enum GamePhase {
     /// High-speed flight race against the tribe's riders.
     Racing,
     Results,
+    /// Free flight through an endless world (F4, `--explore`).
+    Explore,
+    /// One frame between two worlds: Bevy skips OnExit/OnEnter when a state
+    /// is set to itself, so "new world" passes through here.
+    ExploreReload,
 }
 
 /// The Ephemera's stats. Written during taming, read during racing.
@@ -100,6 +105,7 @@ impl Plugin for StatePlugin {
             GamePhase::Taming,
             GamePhase::Racing,
             GamePhase::Results,
+            GamePhase::Explore,
         ] {
             app.add_systems(OnExit(phase), despawn_phase_scoped);
         }
@@ -121,9 +127,27 @@ impl EphemeraStats {
 }
 
 /// `cargo run --release -- --race` (or `--capture`, `--taming`) skips ahead.
-fn skip_from_cli(mut next: ResMut<NextState<GamePhase>>, mut stats: ResMut<EphemeraStats>) {
-    for arg in std::env::args().skip(1) {
+/// `cargo run --release -- --explore --seed 0x2a` replays world 0x2a.
+fn skip_from_cli(
+    mut next: ResMut<NextState<GamePhase>>,
+    mut stats: ResMut<EphemeraStats>,
+    mut explore_seed: ResMut<crate::explore::ExploreSeed>,
+) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
+            "--explore" => next.set(GamePhase::Explore),
+            "--seed" => {
+                let v = args.get(i + 1).map(String::as_str).unwrap_or("");
+                let parsed = v
+                    .strip_prefix("0x")
+                    .map(|h| u64::from_str_radix(h, 16).ok())
+                    .unwrap_or_else(|| v.parse().ok());
+                match parsed {
+                    Some(seed) => explore_seed.0 = Some(seed),
+                    None => warn!("--seed needs a number (decimal or 0x…), got `{v}`"),
+                }
+            }
             "--capture" => next.set(GamePhase::Capture),
             "--taming" => next.set(GamePhase::Taming),
             "--race" => {
@@ -155,7 +179,7 @@ fn global_hotkeys(
     mut log: ResMut<RunLog>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    // F1/F2/F3 jump straight to a phase — handy for testing a single one.
+    // F1–F4 jump straight to a phase — handy for testing a single one.
     if keys.just_pressed(KeyCode::F1) {
         next.set(GamePhase::Capture);
     } else if keys.just_pressed(KeyCode::F2) {
@@ -163,6 +187,8 @@ fn global_hotkeys(
     } else if keys.just_pressed(KeyCode::F3) {
         *stats = EphemeraStats::quick_race();
         next.set(GamePhase::Racing);
+    } else if keys.just_pressed(KeyCode::F4) {
+        next.set(GamePhase::Explore);
     }
 
     // Escape always backs out to the title; from the title it quits.

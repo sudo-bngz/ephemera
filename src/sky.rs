@@ -235,14 +235,23 @@ pub fn spawn_sky(
         unlit: true,
         ..default()
     });
+    // The ring follows the camera across the plane (not up and down), so the
+    // horizon never runs out however far the endless world is travelled.
+    let ring = commands
+        .spawn((
+            PhaseScoped,
+            MesaRing,
+            Name::new("Mesa ring"),
+            Transform::default(),
+            Visibility::default(),
+        ))
+        .id();
     let mesa_mesh = meshes.add(Cylinder::new(1.0, 1.0).mesh().resolution(7));
     let spire_mesh = meshes.add(Cone::new(1.0, 1.0).mesh().resolution(6));
     for i in 0..46 {
         let far = i % 2 == 1;
         let a = rng.gen_range(0.0..std::f32::consts::TAU);
-        // Must stay inside the dome (which is centred on the camera) from
-        // anywhere on the track, which reaches ~250 m from the origin:
-        // 610 + 250 < DOME_RADIUS.
+        // Inside the dome (both are centred on the camera).
         let dist = if far {
             rng.gen_range(560.0..610.0)
         } else {
@@ -251,28 +260,47 @@ pub fn spawn_sky(
         let h = rng.gen_range(30.0..110.0);
         let w = rng.gen_range(30.0..90.0);
         let spire = rng.gen_bool(0.3);
-        commands.spawn((
-            PhaseScoped,
-            Mesh3d(if spire {
-                spire_mesh.clone()
-            } else {
-                mesa_mesh.clone()
-            }),
-            MeshMaterial3d(if far {
-                rock_far_mat.clone()
-            } else {
-                rock_mat.clone()
-            }),
-            crate::models::Swappable::new(crate::models::ModelKind::Mesa),
-            Transform::from_xyz(a.cos() * dist, h * 0.5 - 2.0, a.sin() * dist)
-                .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..3.0)))
-                .with_scale(if spire {
-                    Vec3::new(w * 0.4, h * 1.6, w * 0.4)
+        let mesa = commands
+            .spawn((
+                Mesh3d(if spire {
+                    spire_mesh.clone()
                 } else {
-                    Vec3::new(w, h, w * rng.gen_range(0.6..1.0))
+                    mesa_mesh.clone()
                 }),
-            NotShadowCaster,
-        ));
+                MeshMaterial3d(if far {
+                    rock_far_mat.clone()
+                } else {
+                    rock_mat.clone()
+                }),
+                crate::models::Swappable::new(crate::models::ModelKind::Mesa),
+                Transform::from_xyz(a.cos() * dist, h * 0.5 - 2.0, a.sin() * dist)
+                    .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..3.0)))
+                    .with_scale(if spire {
+                        Vec3::new(w * 0.4, h * 1.6, w * 0.4)
+                    } else {
+                        Vec3::new(w, h, w * rng.gen_range(0.6..1.0))
+                    }),
+                NotShadowCaster,
+            ))
+            .id();
+        commands.entity(ring).add_child(mesa);
+    }
+}
+
+/// Distant mesas, kept centred on the camera horizontally.
+#[derive(Component)]
+struct MesaRing;
+
+fn follow_camera_xz(
+    cam: Query<&Transform, (With<Camera3d>, Without<MesaRing>)>,
+    mut ring: Query<&mut Transform, With<MesaRing>>,
+) {
+    let Ok(cam) = cam.single() else {
+        return;
+    };
+    for mut tf in &mut ring {
+        tf.translation.x = cam.translation.x;
+        tf.translation.z = cam.translation.z;
     }
 }
 
@@ -302,7 +330,11 @@ impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (follow_camera.after(crate::camera::follow), drift_clouds)
+            (
+                follow_camera.after(crate::camera::follow),
+                follow_camera_xz.after(crate::camera::follow),
+                drift_clouds,
+            )
                 .in_set(crate::GameSet::Camera),
         );
     }

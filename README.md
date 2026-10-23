@@ -7,7 +7,10 @@ child until she has ridden the wind — so she has one season to find a wild
 **Ephemera**, make it hers, and race it at the Gathering.
 
 Built in Rust on [Bevy 0.17](https://bevyengine.org). No external assets: the
-creature, the rider and the wetlands are all assembled from primitives at runtime.
+creature, the rider and an **endless procedural world** are assembled at runtime, and
+its landmarks are painted live by [alea](https://github.com/sudo-bngz/alea), a
+language for generative art: every monolith, orb, veil and sigil is an edition of its
+own.
 
 ## The three phases
 
@@ -20,6 +23,14 @@ creature, the rider and the wetlands are all assembled from primitives at runtim
 Low trust at race time means the creature *bucks* — short bursts where it takes the
 controls away from you.
 
+### Explore: the endless marsh
+
+`F4` (or `--explore`) is free flight through a world with no edge. Every visit draws a
+new world: its terrain, its light and every landmark in it, the way an alea work
+draws a new edition at every run. `N` draws another; `--seed 0x2a` brings one back.
+The HUD names the biome below, the edition of the nearest landmark, and how many
+editions you've found.
+
 ## Controls
 
 | | |
@@ -28,12 +39,15 @@ controls away from you.
 | Camp | `1`–`4` pick what to do with the dawn · `Enter` ride to the Gathering |
 | Flight | `W/S` throttle · `A/D` bank · `Q` dive / `E` climb · `Shift` boost |
 | Anywhere | `Enter` confirm · `Esc` back to title / quit |
-| Shortcuts | `F1` stalk · `F2` tether · `F3` race (with a pre-tamed mount) |
+| Explore | flight controls · `N` new world |
+| Shortcuts | `F1` stalk · `F2` tether · `F3` race (with a pre-tamed mount) · `F4` explore |
 
 Jump straight to a phase from the command line:
 
 ```sh
-cargo run --release -- --race     # or --capture, --taming
+cargo run --release -- --race                  # or --capture, --taming
+cargo run --release -- --explore               # a new world
+cargo run --release -- --explore --seed 0x2a   # that world again
 ```
 
 ## Running on macOS
@@ -60,7 +74,7 @@ To check or test without a GPU (CI, SSH box):
 
 ```sh
 cargo clippy
-cargo test   # headless smoke test: ticks every phase with MinimalPlugins
+cargo test   # headless: every phase, streaming, alea rendering, terrain, models
 ```
 
 ## Architecture
@@ -76,7 +90,9 @@ src/
 ├── state.rs       GamePhase, EphemeraStats, RunLog, PhaseScoped cleanup
 ├── input.rs       InputAxes — one sampled input resource for all phases
 ├── components.rs  Shared markers (Judith, Ephemera, Velocity, CameraTarget)
-├── world.rs       Procedural wetlands: mud, pools, swaying reed clumps, spores, lighting
+├── terrain.rs     The world's shape: seeded noise, five biomes, lakes (pure, unit-tested)
+├── world.rs       Chunk streaming; terrain meshes, water, reeds, biome props, landmarks
+├── art.rs         alea at runtime: editions rendered off-thread, cached, animated
 ├── sky.rs         Sky dome, sun, clouds, distant mesas, per-mood fog palette
 ├── models.rs      Optional GLB overrides (meshy.ai etc.) swapped in for placeholders
 ├── creature.rs    The Ephemera built from primitives; wing/leg/body animation
@@ -85,8 +101,49 @@ src/
 ├── title.rs       Title screen
 ├── capture.rs     Phase I  — awareness model, cover, net throw, spook & flee
 ├── taming.rs      Phase II — dawn loop, four actions, escape condition
-└── racing.rs      Phase III — flight model, track spline, gates, AI, speed lines, results
+├── racing.rs      Phase III — flight model, track spline, gates, AI, speed lines, results
+└── explore.rs     Free flight through an endless world
+
+assets/alea/       the alea works that paint the landmarks
+assets/models/     optional GLB models + meshy prompts
+tools/meshy-gen/   generates those models with the Meshy API
 ```
+
+### The endless world
+
+The world is one seeded height function (`terrain.rs`) cut into 128 m chunks that
+stream around whoever the camera follows (`world.rs`): nearest first, two per frame,
+dropped once they're out of range. Every chunk is a pure function of the seed and
+its coordinates, so the world is seamless, endless and reproducible.
+
+- **Biomes** blend into each other: the *reed marsh*, the *fungal bloom* (glowing
+  mushrooms to fly under), the *bone dunes* (rib arches to thread), the *crystal
+  flats* (a terraced plateau of shards) and, rarely, the *field of monoliths*.
+- **Lakes** form wherever the terrain dips below the water line; fly low over one
+  for a speed push.
+- **Flight is terrain-relative**: altitude limits, AI riders and gates follow the
+  ground. The race keeps its loop, and its line is kept clear of random obstacles.
+- A chunk builds in under a millisecond; reed clumps are single merged meshes shared
+  between clumps, so they batch on the GPU.
+
+### alea in the game
+
+The landmarks are painted at runtime by four works in [`assets/alea/`](assets/alea/),
+through the alea library (pinned in `Cargo.toml`):
+
+| Work | Becomes |
+|---|---|
+| `monolith.alea` | the carved, glowing faces of obelisks floating over the marsh (animated) |
+| `veil.alea` | aurora curtains hanging in the sky (animated, additive) |
+| `sigil.alea` | circles of light in the mud that nobody in the tribe admits to drawing |
+| `orb.alea` | the marbled, veined skin of spheres drifting through the air (animated) |
+
+Each landmark shows an edition: the work, and a seed derived from the world seed and
+where it stands. The same world always shows the same editions. Editions render on
+background threads, are cached on disk (`~/Library/Caches/ephemera/alea` on macOS),
+and are animated by swapping frames on a material shared by every landmark showing
+that edition. Edit a work, run again, and the world repaints. A work with an error
+is logged and its landmarks stay dark: the game doesn't stop for art.
 
 ### Per-frame ordering
 
@@ -128,13 +185,29 @@ Tuning the feel happens in exactly one place, and the rivals obey the same physi
 Everything is built from primitives, but any of the creature, Judith, reeds, gates and
 horizon rocks can be replaced by dropping a GLB into `assets/models/`. No code change
 needed. See [`assets/models/README.md`](assets/models/README.md) for file names, poly
-budgets, how to fit a model with `models.cfg`, and Meshy prompts written for the game.
+budgets and how to fit a model with `models.cfg`.
+
+To generate them all with the [Meshy API](https://www.meshy.ai/developers):
+
+```sh
+export MESHY_API_KEY=msy_...
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml              # all missing
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- ephemera  # just one
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- --dry-run # show prompts
+```
+
+Prompts live in `assets/models/meshy-prompts.txt`. Each model is a preview task
+(geometry, remeshed to its triangle budget) then a refine task (PBR textures),
+downloaded as GLB. Models run in parallel; task ids are recorded so an interrupted
+run resumes without paying twice, and a task Meshy fails is started over on the next
+run.
 
 ## Roadmap
 
 - Audio (`bevy_audio`): wing drone pitched by speed, gate chimes, marsh ambience.
 - Gamepad support — `InputAxes` is already the single point to extend.
-- Terrain heightfield; rigged wings for a custom Ephemera model.
+- Rigged wings for a custom Ephemera model.
+- alea's `render sound` as the world's soundtrack: each landmark hums its edition.
 - Ghost replay of your best lap; tribe leaderboard.
 - A fourth phase: the naming ceremony.
 

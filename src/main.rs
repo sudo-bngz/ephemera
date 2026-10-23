@@ -15,10 +15,12 @@
     clippy::collapsible_if
 )]
 
+mod art;
 mod camera;
 mod capture;
 mod components;
 mod creature;
+mod explore;
 mod hud;
 mod input;
 mod models;
@@ -26,6 +28,7 @@ mod racing;
 mod sky;
 mod state;
 mod taming;
+mod terrain;
 mod title;
 mod world;
 
@@ -67,6 +70,7 @@ impl Plugin for GamePlugin {
             models::ModelsPlugin,
             world::WorldPlugin,
             sky::SkyPlugin,
+            art::ArtPlugin,
             creature::CreaturePlugin,
             camera::CameraPlugin,
             hud::HudPlugin,
@@ -74,6 +78,7 @@ impl Plugin for GamePlugin {
             capture::CapturePlugin,
             taming::TamingPlugin,
             racing::RacingPlugin,
+            explore::ExplorePlugin,
         ));
     }
 }
@@ -123,6 +128,7 @@ mod smoke {
         ))
         .init_asset::<Mesh>()
         .init_asset::<StandardMaterial>()
+        .init_asset::<Image>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )))
@@ -227,7 +233,12 @@ mod smoke {
         let (entity, tf) = player;
         let fwd = tf.forward().as_vec3().with_y(0.0).normalize();
         let side = Vec3::new(-fwd.z, 0.0, fwd.x);
-        let ahead = tf.translation.with_y(0.0) + fwd * 25.0;
+        let ahead = tf.translation + fwd * 25.0;
+        let terrain = app
+            .world()
+            .resource::<crate::world::WorldTerrain>()
+            .0
+            .clone();
         // Two tall clumps with a 1 m gap between them, right on the path:
         // narrower than the Ephemera, wide enough to aim for.
         for s in [-1.0, 1.0] {
@@ -240,9 +251,10 @@ mod smoke {
                     tilt: Vec2::ZERO,
                     tilt_vel: Vec2::ZERO,
                     phase: 0.0,
+                    yaw: 0.0,
                 },
-                Transform::from_translation(ahead + side * s * 4.0),
-                GlobalTransform::from_translation(ahead + side * s * 4.0),
+                Transform::from_translation(on_ground(&terrain, ahead + side * s * 4.0)),
+                GlobalTransform::from_translation(on_ground(&terrain, ahead + side * s * 4.0)),
             ));
         }
         // Like a player aiming for the gate behind the reeds: keep steering
@@ -281,6 +293,148 @@ mod smoke {
             progress > 70.0,
             "stuck at the clumps: only {progress:.1} m of progress in 5 s (now {now:?})"
         );
+    }
+
+    fn on_ground(t: &crate::terrain::Terrain, p: Vec3) -> Vec3 {
+        p.with_y(t.surface(p.x, p.z))
+    }
+
+    fn explore(app: &mut App, seed: u64) {
+        app.world_mut()
+            .resource_mut::<crate::explore::ExploreSeed>()
+            .0 = Some(seed);
+        app.world_mut()
+            .resource_mut::<NextState<GamePhase>>()
+            .set(GamePhase::Explore);
+        tick(app, 3);
+        assert_eq!(phase(app), GamePhase::Explore);
+    }
+
+    fn chunks_loaded(app: &App) -> Vec<IVec2> {
+        app.world()
+            .resource::<crate::world::WorldGen>()
+            .loaded()
+            .copied()
+            .collect()
+    }
+
+    /// The world streams around the player: fly 3 km away and the chunks
+    /// follow, the old ones are freed, and nothing piles up.
+    #[test]
+    fn world_streams_endlessly() {
+        let mut app = app();
+        explore(&mut app, 42);
+        tick(&mut app, 120);
+        let near_origin = chunks_loaded(&app);
+        assert!(
+            near_origin.len() > 30,
+            "only {} chunks around the start",
+            near_origin.len()
+        );
+        assert!(near_origin.contains(&IVec2::ZERO));
+
+        // Teleport the player 3 km east.
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::racing::Player>>()
+            .single(app.world())
+            .unwrap();
+        let far = Vec3::new(3000.0, 40.0, -150.0);
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .unwrap()
+            .translation = far;
+        tick(&mut app, 200);
+
+        let loaded = chunks_loaded(&app);
+        let centre = (far.xz() / crate::world::CHUNK).floor().as_ivec2();
+        assert!(loaded.contains(&centre), "no chunk under the player");
+        assert!(
+            loaded.iter().all(|c| (*c - centre).length_squared() <= 26),
+            "chunks left behind near the origin"
+        );
+        let mut live: Vec<IVec2> = app
+            .world_mut()
+            .query::<&crate::world::Chunk>()
+            .iter(app.world())
+            .map(|c| c.0)
+            .collect();
+        let mut expected = loaded.clone();
+        live.sort_by_key(|c| (c.x, c.y));
+        expected.sort_by_key(|c| (c.x, c.y));
+        assert_eq!(
+            live, expected,
+            "despawned chunks are still alive (or missing)"
+        );
+        // And the player is flying above the ground there, not under it.
+        let y = app.world().get::<Transform>(player).unwrap().translation.y;
+        let ground = app
+            .world()
+            .resource::<crate::world::WorldTerrain>()
+            .0
+            .surface(far.x, far.z);
+        assert!(y >= ground, "player at {y} under the ground at {ground}");
+    }
+
+    /// Landmarks wear editions painted by alea: wait for the background
+    /// renders and check they landed on the materials.
+    #[test]
+    fn landmarks_are_painted_by_alea() {
+        use crate::art::{Art, Landmark};
+        let mut app = app();
+        explore(&mut app, 7);
+        tick(&mut app, 60);
+        let landmarks = app
+            .world_mut()
+            .query::<&Landmark>()
+            .iter(app.world())
+            .count();
+        assert!(landmarks > 0, "no landmark in the first chunks");
+
+        // Rendering happens on background threads: give it real time.
+        for _ in 0..600 {
+            if app.world().resource::<Art>().pending() == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            app.update();
+        }
+        tick(&mut app, 2);
+        let art = app.world().resource::<Art>();
+        assert_eq!(art.pending(), 0, "alea still painting after 15 s");
+        assert_eq!(art.failed(), 0, "some editions failed to paint");
+        assert!(art.ready() > 0);
+
+        let mats = app
+            .world_mut()
+            .query_filtered::<&MeshMaterial3d<StandardMaterial>, With<Landmark>>()
+            .iter(app.world())
+            .map(|m| m.0.clone())
+            .collect::<Vec<_>>();
+        let assets = app.world().resource::<Assets<StandardMaterial>>();
+        let textured = mats
+            .iter()
+            .filter(|h| {
+                assets
+                    .get(*h)
+                    .is_some_and(|m| m.base_color_texture.is_some())
+            })
+            .count();
+        assert_eq!(textured, mats.len(), "landmarks without their alea texture");
+    }
+
+    /// N draws a new world in place.
+    #[test]
+    fn new_world_on_demand() {
+        let mut app = app();
+        explore(&mut app, 1);
+        let first = app.world().resource::<crate::world::WorldGen>().seed;
+        press(&mut app, KeyCode::KeyN);
+        tick(&mut app, 3);
+        release(&mut app, KeyCode::KeyN);
+        assert_eq!(phase(&app), GamePhase::Explore);
+        let second = app.world().resource::<crate::world::WorldGen>().seed;
+        assert_ne!(first, second, "N didn't change the world");
     }
 
     #[test]
