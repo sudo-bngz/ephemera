@@ -19,6 +19,11 @@ work Veil {
 
   output glow * ends * (0.35 + 0.45 * rays + 0.2 * fine)
 
+  // Its hum: the folds as a choir, breathing with the loop.
+  render sound(drone(glow * (0.5 + 0.5 * rays), voices: 5, instrument: "choir", scale: "lydian", key: "C3", gain: 0.5),
+               drone(0.6, voices: 2, instrument: "choir", scale: "lydian", key: "C2", gain: 0.25),
+               duration: 12, room: 0.7)
+
   render video(output, duration: 6, fps: 12, width: 512, height: 256, format: "gif",
                range: [0, 1],
                palette: choose {

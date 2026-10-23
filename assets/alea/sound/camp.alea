@@ -1,0 +1,12 @@
+// Camp — dawn at the tether: a kalimba figure over slow chords, rain easing.
+
+work Camp {
+  let m     = meter(tempo: 84, bars: 8)
+  let prog  = chords("functional", key: "G3", scale: "major", bars: m, tension: 0.3)
+  let pulse = euclid(hits: choose { 5 | 7 }, steps: 16, bars: m)
+  let dawn  = 0.4 + 0.6 * smoothstep(0.0, 1.0, t)
+  render sound(arp(prog, pulse, mode: choose { "up" | "updown" }, octaves: 2, instrument: "kalimba", gain: 0.6),
+               drone(dawn, voices: 4, instrument: "strings", harmony: prog, gain: 0.35),
+               texture(1 - dawn, kind: "rain", gain: 0.3),
+               duration: m.length, room: 0.4)
+}

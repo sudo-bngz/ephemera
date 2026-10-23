@@ -16,7 +16,7 @@ use crate::components::Velocity;
 use crate::hud::Hud;
 use crate::racing::{Player, Race, Rider, spawn_player_rider, spawn_speed_lines};
 use crate::state::{EphemeraStats, GamePhase};
-use crate::terrain::{Biome, Flatten};
+use crate::terrain::{Flatten, RegionId};
 use crate::world::{Mood, WorldSetup, WorldTerrain, spawn_world};
 
 /// A world to replay instead of a new one (`--seed`), consumed on entry.
@@ -29,8 +29,10 @@ struct Explore {
     seen: HashSet<EditionId>,
     travelled: f32,
     last: Option<Vec3>,
-    biome: Option<Biome>,
-    biome_banner: f32,
+    /// The land under the player: its edition.
+    region: Option<RegionId>,
+    region_banner: f32,
+    lands_seen: HashSet<RegionId>,
 }
 
 fn new_seed() -> u64 {
@@ -87,16 +89,17 @@ fn setup(
         seen: HashSet::new(),
         travelled: 0.0,
         last: None,
-        biome: None,
-        biome_banner: 0.0,
+        region: None,
+        region_banner: 0.0,
+        lands_seen: HashSet::new(),
     });
 
     *hud = Hud {
         title: "THE ENDLESS MARSH".into(),
         body: format!(
             "World 0x{seed:x}. It goes on for ever; nobody has seen its edge.\n\
-             Follow the lights: the monoliths, orbs, veils and sigils are painted by alea,\n\
-             and every one of them is an edition of its own."
+             Every land here and every light over it is an edition drawn by alea:\n\
+             the relief, the ground, the monoliths, the orbs, and what you hear."
         ),
         banner: String::new(),
         footer:
@@ -127,6 +130,8 @@ fn hud(
     mut ex: ResMut<Explore>,
     terrain: Res<WorldTerrain>,
     art: Res<Art>,
+    sounds: Res<crate::audio::Sounds>,
+    wg: Res<crate::world::WorldGen>,
     player: Query<(&Transform, &Velocity, &Rider), With<Player>>,
     landmarks: Query<(&GlobalTransform, &Landmark)>,
     mut hud: ResMut<Hud>,
@@ -140,15 +145,19 @@ fn hud(
     }
     ex.last = Some(p);
 
-    // Entering a new biome gets a banner for a few seconds.
-    let biome = terrain.0.biome(p.x, p.z);
-    if ex.biome != Some(biome) {
-        if ex.biome.is_some() {
-            ex.biome_banner = 3.0;
+    // Crossing into another land (another alea edition) gets a banner.
+    let region = terrain.0.region_at(p.x, p.z).map(|r| r.id.clone());
+    if ex.region != region {
+        if ex.region.is_some() {
+            ex.region_banner = 3.0;
         }
-        ex.biome = Some(biome);
+        if let Some(r) = &region {
+            ex.lands_seen.insert(r.clone());
+        }
+        ex.region = region;
     }
-    ex.biome_banner = (ex.biome_banner - time.delta_secs()).max(0.0);
+    ex.region_banner = (ex.region_banner - time.delta_secs()).max(0.0);
+    let land = ex.region.as_ref().map(|r| r.label()).unwrap_or_default();
 
     // The nearest landmark within sight: its edition, alea-style.
     let near = landmarks
@@ -163,23 +172,32 @@ fn hud(
     }
 
     let ground = terrain.0.surface(p.x, p.z);
-    let painting = match (art.pending(), art.failed()) {
+    let mut painting = match (art.pending(), art.failed()) {
         (0, 0) => format!("\nalea: {} edition(s) painted", art.ready()),
         (0, f) => format!("\nalea: {f} edition(s) failed — see the log"),
         (p, _) => format!("\nalea: painting {p} edition(s)…"),
     };
+    painting += &match (sounds.pending(), sounds.failed()) {
+        (0, 0) => format!(", {} sound(s)", sounds.ready()),
+        (0, f) => format!(", {f} sound(s) failed"),
+        (p, _) => format!(", rendering {p} sound(s)…"),
+    };
+    if wg.pending() > 0 {
+        painting += &format!("\nbuilding {} chunk(s)…", wg.pending());
+    }
     hud.side = format!(
-        "{:>4.0} km/h\nalt {:>3.0} m\nboost {}\n\n{}\n{:.1} km travelled\n{} edition(s) found{}",
+        "{:>4.0} km/h\nalt {:>3.0} m\nboost {}\n\n{}\n{:.1} km travelled\n{} land(s), {} landmark edition(s) found{}",
         vel.0.length() * 3.6,
         (p.y - ground).max(0.0),
         "█".repeat((rider.boost_fraction() * 10.0).round() as usize),
-        biome.name(),
+        land,
         ex.travelled / 1000.0,
+        ex.lands_seen.len(),
         ex.seen.len(),
         painting,
     );
-    hud.banner = if ex.biome_banner > 0.0 {
-        format!("— {} —", biome.name())
+    hud.banner = if ex.region_banner > 0.0 {
+        format!("— {land} —")
     } else if let Some((_, id)) = near {
         id.label()
     } else {

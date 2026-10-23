@@ -7,10 +7,10 @@ child until she has ridden the wind — so she has one season to find a wild
 **Ephemera**, make it hers, and race it at the Gathering.
 
 Built in Rust on [Bevy 0.17](https://bevyengine.org). No external assets: the
-creature, the rider and an **endless procedural world** are assembled at runtime, and
-its landmarks are painted live by [alea](https://github.com/sudo-bngz/alea), a
-language for generative art: every monolith, orb, veil and sigil is an edition of its
-own.
+creature and the rider are assembled from primitives, and the **endless world is drawn
+and scored at runtime by [alea](https://github.com/sudo-bngz/alea)**, a language for
+generative art. Every land is an edition of an alea work — its relief, its ground, its
+ambience — and so is every monolith, orb, veil and sigil, picture and hum alike.
 
 ## The three phases
 
@@ -40,6 +40,7 @@ editions you've found.
 | Flight | `W/S` throttle · `A/D` bank · `Q` dive / `E` climb · `Shift` boost |
 | Anywhere | `Enter` confirm · `Esc` back to title / quit |
 | Explore | flight controls · `N` new world |
+| Sound | `M` mute · `--mute` start muted |
 | Shortcuts | `F1` stalk · `F2` tether · `F3` race (with a pre-tamed mount) · `F4` explore |
 
 Jump straight to a phase from the command line:
@@ -70,11 +71,14 @@ cargo run --features dev
 Debug builds keep dependencies optimised (`profile.dev.package."*"` is `opt-level = 3`),
 so even `cargo run` without `--release` is playable.
 
+Sound needs nothing extra on macOS. On Linux, Bevy's audio needs ALSA's headers
+(`libasound2-dev`).
+
 To check or test without a GPU (CI, SSH box):
 
 ```sh
 cargo clippy
-cargo test   # headless: every phase, streaming, alea rendering, terrain, models
+cargo test   # headless: every phase, streaming, alea pictures and sounds, terrain, models
 ```
 
 ## Architecture
@@ -90,9 +94,10 @@ src/
 ├── state.rs       GamePhase, EphemeraStats, RunLog, PhaseScoped cleanup
 ├── input.rs       InputAxes — one sampled input resource for all phases
 ├── components.rs  Shared markers (Judith, Ephemera, Velocity, CameraTarget)
-├── terrain.rs     The world's shape: seeded noise, five biomes, lakes (pure, unit-tested)
-├── world.rs       Chunk streaming; terrain meshes, water, reeds, biome props, landmarks
-├── art.rs         alea at runtime: editions rendered off-thread, cached, animated
+├── terrain.rs     The world's shape: regions of alea editions, blended; climate; flattening
+├── world.rs       Chunk streaming on the compute pool; ground meshes + painted textures, props, landmarks
+├── art.rs         alea pictures: editions rendered off-thread, cached, animated
+├── audio.rs       alea sound: ambience by region, landmark hums in space, wings, music, chimes
 ├── sky.rs         Sky dome, sun, clouds, distant mesas, per-mood fog palette
 ├── models.rs      Optional GLB overrides (meshy.ai etc.) swapped in for placeholders
 ├── creature.rs    The Ephemera built from primitives; wing/leg/body animation
@@ -104,32 +109,34 @@ src/
 ├── racing.rs      Phase III — flight model, track spline, gates, AI, speed lines, results
 └── explore.rs     Free flight through an endless world
 
-assets/alea/       the alea works that paint the landmarks
+assets/alea/       the alea works: land/ (biomes), sound/ (music, wings, chimes), landmarks
 assets/models/     optional GLB models + meshy prompts
 tools/meshy-gen/   generates those models with the Meshy API
 ```
 
-### The endless world
+### The endless world, drawn by alea
 
-The world is one seeded height function (`terrain.rs`) cut into 128 m chunks that
-stream around whoever the camera follows (`world.rs`): nearest first, two per frame,
-dropped once they're out of range. Every chunk is a pure function of the seed and
-its coordinates, so the world is seamless, endless and reproducible.
+The world is a sea of 512 m regions. Each region is an edition of one of the land
+works in [`assets/alea/land/`](assets/alea/land/) (marsh, fungal bloom, bone dunes,
+crystal flats, field of monoliths), chosen by a climate map so similar lands cluster.
+The game reads a land work's first `render image` as the **relief** (the picture is
+the land: black is the lake bottom, 30 % grey the shoreline, white the peaks), its
+second as the **ground painting**, and its `render sound` as the region's
+**ambience**. Relief and painting are blended between neighbouring regions by
+distance, so editions meet without seams.
 
-- **Biomes** blend into each other: the *reed marsh*, the *fungal bloom* (glowing
-  mushrooms to fly under), the *bone dunes* (rib arches to thread), the *crystal
-  flats* (a terraced plateau of shards) and, rarely, the *field of monoliths*.
-- **Lakes** form wherever the terrain dips below the water line; fly low over one
-  for a speed push.
-- **Flight is terrain-relative**: altitude limits, AI riders and gates follow the
-  ground. The race keeps its loop, and its line is kept clear of random obstacles.
-- A chunk builds in under a millisecond; reed clumps are single merged meshes shared
-  between clumps, so they batch on the GPU.
+The ground streams in 128 m chunks around whoever the camera follows: each chunk's
+heights and its 96 × 96 painted texture are sampled from the alea programs on the
+compute pool (~70 ms a chunk, six in flight), nearest first, dropped behind. Lakes
+form wherever the relief dips below the water line; flight, AI riders and gates follow
+the ground. Everything is a function of the seed and a position, so the world is
+seamless, endless and reproducible, and `N` draws a new one.
 
-### alea in the game
+Drop another `.alea` file into `assets/alea/land/` and it becomes a land of the world.
 
-The landmarks are painted at runtime by four works in [`assets/alea/`](assets/alea/),
-through the alea library (pinned in `Cargo.toml`):
+### alea in the game: pictures
+
+The landmarks are painted at runtime by four works in `assets/alea/`:
 
 | Work | Becomes |
 |---|---|
@@ -139,46 +146,25 @@ through the alea library (pinned in `Cargo.toml`):
 | `orb.alea` | the marbled, veined skin of spheres drifting through the air (animated) |
 
 Each landmark shows an edition: the work, and a seed derived from the world seed and
-where it stands. The same world always shows the same editions. Editions render on
-background threads, are cached on disk (`~/Library/Caches/ephemera/alea` on macOS),
-and are animated by swapping frames on a material shared by every landmark showing
-that edition. Edit a work, run again, and the world repaints. A work with an error
-is logged and its landmarks stay dark: the game doesn't stop for art.
+where it stands. Editions render on background threads, are cached on disk, and are
+animated by swapping frames on a material shared by every landmark showing that
+edition.
 
-### Per-frame ordering
+### alea in the game: sound
 
-`GameSet::Input → Simulation → Camera → Hud`, chained in `Update`. Input is sampled
-once, the simulation integrates from it, the camera follows the *result* of the
-simulation, and the HUD reads the final state — so what you see is never a frame stale.
-That ordering is most of what makes the controls feel responsive.
+There is no audio file in the repository. Every loop and chime is a `render sound`,
+rendered by alea when first needed (about a second for twenty seconds of stereo) and
+cached as WAV:
 
-### The flight model
+- each region's **ambience**, crossfaded by distance as you fly from land to land;
+- each landmark's **hum** — the same work that paints it — placed in space on it;
+- the Ephemera's **wings** (`sound/wings.alea`), a loop pitched up with speed;
+- **music** for the title, the camp and the race (`sound/title|camp|race.alea`),
+  a new edition per world;
+- the **chimes** of the rite (`sound/events.alea`, one render per event).
 
-Player and AI riders share one `Rider` component and one `integrate` system; the only
-difference is who fills in their `FlightInput` (the player system copies `InputAxes`,
-the AI system steers along the track spline with a look-ahead point and rubber-banding).
-Tuning the feel happens in exactly one place, and the rivals obey the same physics.
-
-- Longitudinal: thrust minus quadratic drag tuned so terminal velocity equals the
-  creature's top speed; boost multiplies both.
-- Yaw rate tightens at low speed and opens at high speed; visual roll follows steering.
-- Altitude is soft-clamped; dragging through the mud bleeds speed; skimming low over a
-  pool gives a small push.
-- Short reeds are soft: you plough through with a little drag and they whip aside.
-- Tall reeds are solid but never a wall: you slide along them, lose speed once per
-  impact (more if head-on) and flutter upwards to hop over. Pushes from overlapping
-  clumps are summed, so two clumps can never pin you between them.
-
-### Speed sensation
-
-- Chase camera sits lower and closer as speed rises; FOV widens by up to 30°.
-- Camera rolls with the bank, shakes on boost, gate pass, collisions and bucking.
-- Speed-line streaks stream past the camera above ~55% of top speed.
-- Reed beds line the racing line so the ground visibly rushes by at low altitude, and
-  bend away as you tear past.
-- Fog tied to a gradient sky dome: distance fades into the horizon colour, so speed
-  reads against a world with depth instead of a flat backdrop.
-- The creature's wing-beat frequency and amplitude scale with speed.
+[`assets/alea/README.md`](assets/alea/README.md) has the conventions, and the two
+things alea does to every sound that a game has to work around.
 
 ## Custom 3D models (meshy.ai)
 
@@ -208,10 +194,9 @@ run.
 
 ## Roadmap
 
-- Audio (`bevy_audio`): wing drone pitched by speed, gate chimes, marsh ambience.
 - Gamepad support — `InputAxes` is already the single point to extend.
 - Rigged wings for a custom Ephemera model.
-- alea's `render sound` as the world's soundtrack: each landmark hums its edition.
+- Audio ducking and a mixer; HRTF for the hums.
 - Ghost replay of your best lap; tribe leaderboard.
 - A fourth phase: the naming ceremony.
 

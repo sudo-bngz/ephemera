@@ -16,6 +16,7 @@
 )]
 
 mod art;
+mod audio;
 mod camera;
 mod capture;
 mod components;
@@ -71,6 +72,7 @@ impl Plugin for GamePlugin {
             world::WorldPlugin,
             sky::SkyPlugin,
             art::ArtPlugin,
+            audio::SoundPlugin,
             creature::CreaturePlugin,
             camera::CameraPlugin,
             hud::HudPlugin,
@@ -129,6 +131,7 @@ mod smoke {
         .init_asset::<Mesh>()
         .init_asset::<StandardMaterial>()
         .init_asset::<Image>()
+        .init_asset::<AudioSource>()
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )))
@@ -310,6 +313,20 @@ mod smoke {
         assert_eq!(phase(app), GamePhase::Explore);
     }
 
+    /// Chunks build on the compute pool: tick with real time until none is
+    /// pending (or the deadline passes).
+    fn settle(app: &mut App, max_ms: u64) {
+        let start = std::time::Instant::now();
+        loop {
+            app.update();
+            let pending = app.world().resource::<crate::world::WorldGen>().pending();
+            if pending == 0 || start.elapsed().as_millis() as u64 > max_ms {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn chunks_loaded(app: &App) -> Vec<IVec2> {
         app.world()
             .resource::<crate::world::WorldGen>()
@@ -324,7 +341,7 @@ mod smoke {
     fn world_streams_endlessly() {
         let mut app = app();
         explore(&mut app, 42);
-        tick(&mut app, 120);
+        settle(&mut app, 30_000);
         let near_origin = chunks_loaded(&app);
         assert!(
             near_origin.len() > 30,
@@ -344,7 +361,7 @@ mod smoke {
             .get_mut::<Transform>(player)
             .unwrap()
             .translation = far;
-        tick(&mut app, 200);
+        settle(&mut app, 30_000);
 
         let loaded = chunks_loaded(&app);
         let centre = (far.xz() / crate::world::CHUNK).floor().as_ivec2();
@@ -383,7 +400,7 @@ mod smoke {
         use crate::art::{Art, Landmark};
         let mut app = app();
         explore(&mut app, 7);
-        tick(&mut app, 60);
+        settle(&mut app, 30_000);
         let landmarks = app
             .world_mut()
             .query::<&Landmark>()
@@ -421,6 +438,74 @@ mod smoke {
             })
             .count();
         assert_eq!(textured, mats.len(), "landmarks without their alea texture");
+    }
+
+    /// The world sounds: wait for alea to render, then the player's wings
+    /// hum, the lands around play their ambience, nearby landmarks hum in
+    /// place, and a chime plays on request. (No audio device here: the
+    /// players exist, Bevy's sinks don't.)
+    #[test]
+    fn the_world_sounds() {
+        use crate::audio::{PlaySound, Sfx, Sounds};
+        let mut app = app();
+        explore(&mut app, 7);
+        settle(&mut app, 30_000);
+        // Rendering happens on background threads: give it real time.
+        let start = std::time::Instant::now();
+        loop {
+            app.update();
+            let s = app.world().resource::<Sounds>();
+            if s.pending() == 0 && s.ready() > 0 || start.elapsed().as_secs() > 60 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        tick(&mut app, 3);
+        let s = app.world().resource::<Sounds>();
+        assert_eq!(s.failed(), 0, "some sounds failed to render");
+        assert!(
+            s.ready() >= 9,
+            "only {} clips ready (wings + 7 events + ambience…)",
+            s.ready()
+        );
+
+        let players = app
+            .world_mut()
+            .query::<(&AudioPlayer, &PlaybackSettings)>()
+            .iter(app.world())
+            .count();
+        assert!(players >= 2, "no ambience/wings players ({players})");
+        let spatial = app
+            .world_mut()
+            .query::<&PlaybackSettings>()
+            .iter(app.world())
+            .filter(|p| p.spatial)
+            .count();
+        let near_landmarks = app
+            .world_mut()
+            .query::<(&GlobalTransform, &crate::art::Landmark)>()
+            .iter(app.world())
+            .filter(|(t, _)| t.translation().length() < 170.0)
+            .count();
+        assert!(
+            near_landmarks == 0 || spatial > 0,
+            "{near_landmarks} landmark(s) in earshot but none hums"
+        );
+
+        // A chime: the message spawns a one-shot player.
+        let before = app
+            .world_mut()
+            .query::<&AudioPlayer>()
+            .iter(app.world())
+            .count();
+        app.world_mut().write_message(PlaySound(Sfx::Gate));
+        tick(&mut app, 2);
+        let after = app
+            .world_mut()
+            .query::<&AudioPlayer>()
+            .iter(app.world())
+            .count();
+        assert_eq!(after, before + 1, "the gate chime didn't play");
     }
 
     /// N draws a new world in place.

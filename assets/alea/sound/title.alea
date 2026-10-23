@@ -1,0 +1,12 @@
+// Title — dusk over the marsh: a slow choir, far bells, wind.
+
+work Title {
+  let swell = 0.5 + 0.5 * sin(t * tau)
+  let sky   = clouds(scale: 2) * 0.6 + swell * 0.4
+  pattern bells = repeat ~poisson(9) event(size: ~between(0.02, 0.05), intensity: ~between(0.3, 0.7),
+                                           y: ~between(0.2, 0.8))
+  render sound(drone(sky, voices: 5, instrument: "choir", scale: "dorian", key: "D2", gain: 0.6),
+               notes(bells, instrument: "bell", scale: "dorian", key: "D4", gain: 0.4),
+               texture(sky, kind: "wind", gain: 0.35),
+               duration: 32, room: 0.6)
+}

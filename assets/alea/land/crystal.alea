@@ -1,0 +1,25 @@
+// Crystal flats — a high plateau cut into terraces, bristling with shards.
+
+work Crystal {
+  let plateau = smoothstep(0.25, 0.75, warp(clouds(scale: 2), amount: 0.06))
+  let steps   = posterize(plateau, levels: choose { 5 | 6 | 8 })
+
+  field relief = 0.4 + 0.5 * steps
+  render image(relief, range: [0, 1],
+               palette: ["#000000", "#1e2a3a", "#3a5a7a", "#7aa8c8", "#e8f4ff"])
+
+  // Fractured rock, veins of light where the plateau crosses a terrace.
+  let f      = fract(plateau * 6)
+  let plates = 1 - smoothstep(0.0, 0.05, min(f, 1 - f))
+  let frost  = checker(count: 24) * 0.08 + clouds(scale: 9) * 0.5 + steps * 0.3
+  render image(frost + plates,
+               palette: ["#26324a", "#3e5478", "#6a8fb4", "#b4d4ec", "#f4fbff"])
+
+  // Glass harmonics, high and thin; shards ticking as they cool.
+  pattern ticks = repeat ~poisson(50) event(size: ~between(0.001, 0.004), intensity: ~between(0.2, 0.7),
+                                            y: ~between(0.6, 1.0))
+  render sound(drone(plateau, voices: 6, instrument: "glass", scale: "harmonics", key: "E2", gain: 0.6),
+               notes(ticks, instrument: "glass", scale: "whole-tone", key: "E6", gain: 0.3),
+               texture(steps, kind: "wind", gain: 0.2),
+               duration: 20, room: 0.6)
+}

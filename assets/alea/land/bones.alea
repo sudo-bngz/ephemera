@@ -1,0 +1,25 @@
+// Bone dunes — long pale dunes ribbed with the remains of something enormous.
+
+work Bones {
+  let angle = ~between(0, 180)
+  let dunes = waves(count: ~between(5, 8), angle: angle, height: 0.03, wiggles: 2, softness: 0.6)
+  let drift = clouds(scale: 2) * 0.5 + 0.5
+
+  field relief = 0.34 + 0.3 * dunes * (0.5 + 0.5 * drift)
+  render image(relief, range: [0, 1],
+               palette: ["#000000", "#4a3a2a", "#8a6e4e", "#d6b88c", "#fff4d8"])
+
+  // Wind-ribbed sand, salt crusts.
+  let ribs = stripes(count: 60, angle: angle + 90, softness: 0.5) * 0.25
+  let crust = threshold(clouds(scale: 7), level: 0.6, softness: 0.05) * 0.4
+  render image(dunes * 0.5 + ribs + crust + grain(0.06),
+               palette: ["#6a5438", "#a88a62", "#d8bf94", "#f4e6c8"])
+
+  // Wind over bone: hollow, with knocks.
+  pattern knocks = repeat ~poisson(10) event(size: ~between(0.004, 0.01), intensity: ~between(0.3, 0.9),
+                                             y: ~between(0.0, 0.4))
+  render sound(texture(drift, kind: "wind", gain: 0.9),
+               drone(dunes, voices: 3, instrument: "wind", scale: "minor-pentatonic", key: "A1", gain: 0.5),
+               notes(knocks, instrument: "wood", scale: "minor-pentatonic", key: "A2", gain: 0.5),
+               duration: 20, room: 0.45)
+}

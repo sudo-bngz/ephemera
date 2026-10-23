@@ -1,0 +1,30 @@
+// Field of monoliths — a flooded basin with a rose window carved in its floor,
+// the ridges just breaking the surface.
+
+work Monoliths {
+  let sides = choose { 6 | 8 | 10 | 12 }
+  let rose  = kaleidoscope(merge(ripples(x: 0.5, y: 0.5, count: ~between(5, 9)) * 0.5,
+                                 blob(x: 0.7, y: 0.5, size: 0.14, softness: 0.03),
+                                 line(0.5, 0.5, 0.95, 0.5, width: 0.012)),
+                           sides: sides)
+
+  field relief = 0.25 + 0.14 * rose + 0.05 * clouds(scale: 4)
+  render image(relief, range: [0, 1],
+               palette: ["#000000", "#0c0a18", "#2a1a4a", "#6a48a8", "#d8c8ff"])
+
+  // The floor glows along the carving.
+  render image(rose * 0.8 + grain(0.05),
+               palette: ["#06040c", "#120c24", "#3a2a7a", "#8a6ae0", "#e8e0ff"])
+
+  // A deep saw drone, crackle, a far bell.
+  let deep = synth {
+    let env = adsr(attack: 2.5, decay: 1.0, sustain: 0.9, release: 3.0)
+    lowpass(saw() + saw(note.freq * 0.5), cutoff: 120 + 900 * note.level, resonance: 0.35) * env
+  }
+  pattern bells = repeat ~poisson(5) event(size: ~between(0.02, 0.05), intensity: ~between(0.4, 0.8),
+                                           y: ~between(0.3, 0.7))
+  render sound(drone(rose, voices: 4, instrument: deep, scale: "phrygian", key: "C1", gain: 0.7),
+               texture(rose, kind: "crackle", gain: 0.3),
+               notes(bells, instrument: "bell", scale: "phrygian", key: "C4", gain: 0.4),
+               duration: 20, room: 0.7)
+}

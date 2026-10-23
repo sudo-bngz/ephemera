@@ -1,0 +1,19 @@
+// Wings — the Ephemera's own voice: a hum that the game pitches up with
+// speed (so it's rendered at cruising pitch). Every edition is a different
+// creature: its detune, its tremor, its breath.
+
+work Wings {
+  let tremor = ~between(4, 9)
+  let buzz = synth {
+    let env  = adsr(attack: 0.3, decay: 0.2, sustain: 1.0, release: 0.3)
+    let body = saw() + saw(note.freq * ~around(1.003, 0.004)) + square(note.freq * 0.5) * 0.4
+    let flutter = 1 + 0.08 * sine(tremor)
+    lowpass(body * flutter, cutoff: 500 + 900 * note.level, resonance: 0.35) * env
+      + noise() * 0.05 * note.level
+  }
+  // A constant field: a drone follows its field stretched to the range it
+  // takes, so anything that moves dips to silence; a constant holds.
+  let hold = 0.85
+  render sound(drone(hold, voices: 1, instrument: buzz, key: ~between(70, 95), gain: 1.0),
+               duration: 4, room: 0.05)
+}

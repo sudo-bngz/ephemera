@@ -16,6 +16,12 @@ work Sigil {
 
   output merge(rose, rims, dust * 0.8) * circle(0.5, 0.5, 1.0, 0.01)
 
+  // Its hum: glass, thin, with ticks along the spokes.
+  pattern ticks = repeat (spokes * 2) event(t: i / n, y: 0.6 + 0.3 * (i % 2), size: 0.004, intensity: 0.5)
+  render sound(drone(rims, voices: 2, instrument: "glass", scale: "harmonics", key: "E3", gain: 0.45),
+               notes(ticks, instrument: "glass", scale: "whole-tone", key: "E5", gain: 0.3),
+               duration: 8, room: 0.5)
+
   render image(output, width: 512, range: [0, 1],
                palette: choose {
                  ["#000000", "#0b4a44", "#3df5d2", "#ffffff"] |

@@ -14,6 +14,15 @@ work Orb {
 
   output (bands * 0.75 + cells * 0.7) * (0.35 + 0.65 * poles)
 
+  // Its hum: a wet, veined pulse.
+  let pulse = synth {
+    let env = adsr(attack: 1.2, decay: 0.6, sustain: 0.8, release: 1.5)
+    lowpass(triangle() + sine(note.freq * 2.01) * 0.3, cutoff: 300 + 600 * sine(0.5) + 400 * note.level, resonance: 0.4) * env
+  }
+  render sound(drone(bands, voices: 3, instrument: pulse, scale: "pentatonic", key: "G2", gain: 0.55),
+               drone(0.7, voices: 2, instrument: pulse, scale: "pentatonic", key: "G1", gain: 0.3),
+               duration: 10, room: 0.45)
+
   render video(output, duration: 5, fps: 12, width: 256, height: 256, format: "gif",
                range: [0, 1.2],
                palette: choose {

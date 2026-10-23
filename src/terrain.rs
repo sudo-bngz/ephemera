@@ -1,77 +1,66 @@
-//! The shape of the endless world: one seeded height function, biomes, water.
+//! The shape of the endless world, drawn by alea.
 //!
-//! Everything here is a pure function of the seed and a position, so chunks
-//! generated in any order, at any time, meet seamlessly, and the same seed
-//! always gives back the same world. No Bevy types beyond `Vec2`/`Vec3`, so
-//! it is cheap to unit-test.
+//! The world is a sea of 512 m *regions*. Each region is an edition of one of
+//! the land works in `assets/alea/land/` (its seed drawn from the world seed
+//! and its coordinates), and a climate map decides which work, so similar
+//! lands cluster into biomes. A land work is read as:
+//!
+//! - its first `render image`: the **relief** — the picture is the land.
+//!   Black is the lake bottom, 30 % grey the shoreline, white the peaks;
+//! - its second `render image` (optional): the **ground painting**;
+//! - its `render sound`: the region's **ambience** (see `audio.rs`).
+//!
+//! Relief and painting are blended between neighbouring regions by
+//! distance, so editions meet without seams. Everything here is a function
+//! of the seed and a position: chunks built in any order, on any thread,
+//! agree exactly, and the same seed always gives back the same world.
 
-use bevy::math::{Vec2, Vec3};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use alea::compile::Program;
+use alea::eval::{self, Edition};
+use alea::media::{self, Palette};
+use alea::{library, library::Module};
+use bevy::asset::io::file::FileAssetReader;
+use bevy::math::{IVec2, Vec2};
+use bevy::prelude::{info, warn};
 
 /// Water surface height. Terrain below it is a lake.
 pub const SEA_LEVEL: f32 = 0.0;
+/// Size of a region: one alea edition.
+pub const REGION: f32 = 512.0;
+/// A region's canvas (0–1) spans twice its size around its centre, so
+/// neighbours overlap and blend inside their canvases.
+const CANVAS: f32 = REGION * 2.0;
+/// Relief value → metres: `(value − SHORE) × RELIEF_M`.
+pub const SHORE: f32 = 0.3;
+pub const RELIEF_M: f32 = 60.0;
+/// How sharply a region's influence falls off with distance (in regions).
+const FALLOFF: f32 = 4.0;
 
+/// The props a region grows, by land work. Works the game doesn't know get
+/// terrain, painting and ambience, but no props.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Biome {
-    /// Reed beds and countless pools: the tribe's home ground.
+pub enum Props {
     Marsh,
-    /// Rolling hills of giant glowing fungi.
     Fungal,
-    /// Pale dunes ribbed with the bones of something enormous.
     Bones,
-    /// A high, dry plateau bristling with crystal shards.
     Crystal,
-    /// A shallow basin where the monoliths float. Rare.
     Monoliths,
+    None,
 }
 
-impl Biome {
-    pub const ALL: [Biome; 5] = [
-        Biome::Marsh,
-        Biome::Fungal,
-        Biome::Bones,
-        Biome::Crystal,
-        Biome::Monoliths,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Biome::Marsh => "the reed marsh",
-            Biome::Fungal => "the fungal bloom",
-            Biome::Bones => "the bone dunes",
-            Biome::Crystal => "the crystal flats",
-            Biome::Monoliths => "the field of monoliths",
-        }
-    }
-
-    /// Anchor in (temperature, strangeness) space; the nearest anchors win.
-    fn anchor(self) -> Vec2 {
-        match self {
-            Biome::Marsh => Vec2::new(-0.35, -0.25),
-            Biome::Fungal => Vec2::new(0.35, -0.3),
-            Biome::Bones => Vec2::new(0.4, 0.35),
-            Biome::Crystal => Vec2::new(-0.4, 0.4),
-            Biome::Monoliths => Vec2::new(0.0, 0.62),
-        }
-    }
-
-    /// Ground colour (linear-ish sRGB components).
-    fn ground(self) -> [f32; 3] {
-        match self {
-            Biome::Marsh => [0.17, 0.14, 0.15],
-            Biome::Fungal => [0.20, 0.12, 0.22],
-            Biome::Bones => [0.55, 0.47, 0.40],
-            Biome::Crystal => [0.30, 0.34, 0.44],
-            Biome::Monoliths => [0.07, 0.06, 0.10],
-        }
-    }
-
-    fn highlight(self) -> [f32; 3] {
-        match self {
-            Biome::Marsh => [0.26, 0.36, 0.25],
-            Biome::Fungal => [0.36, 0.20, 0.40],
-            Biome::Bones => [0.80, 0.72, 0.60],
-            Biome::Crystal => [0.55, 0.66, 0.80],
-            Biome::Monoliths => [0.18, 0.12, 0.30],
+impl Props {
+    fn for_work(name: &str) -> Props {
+        match name {
+            "marsh" => Props::Marsh,
+            "fungal" => Props::Fungal,
+            "bones" => Props::Bones,
+            "crystal" => Props::Crystal,
+            "monoliths" => Props::Monoliths,
+            _ => Props::None,
         }
     }
 }
@@ -84,16 +73,167 @@ pub struct Flatten {
     pub height: f32,
 }
 
-/// The world's shape for one seed.
-#[derive(Clone, Debug)]
-pub struct Terrain {
-    perm: [u8; 512],
-    pub flatten: Vec<Flatten>,
+/// One of the land works, loaded once.
+pub struct LandWork {
+    pub name: String,
+    pub props: Props,
+    /// The work's text, the key of its cached editions.
+    pub src: Arc<str>,
+    module: Arc<Module>,
+    /// Where it sits in climate space; the nearest work wins a region.
+    anchor: Vec2,
 }
 
-impl Terrain {
-    pub fn new(seed: u64) -> Self {
-        // Seeded permutation (splitmix64 drives a Fisher–Yates shuffle).
+/// How the land looks and sounds here: `name — edition 0x…`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RegionId {
+    pub work: String,
+    pub seed: u64,
+}
+
+impl RegionId {
+    pub fn label(&self) -> String {
+        let mut c = self.work.chars();
+        let name = match c.next() {
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            None => String::new(),
+        };
+        format!("{name} — edition 0x{:x}", self.seed)
+    }
+}
+
+/// A resolved region: compiled relief and painting, and the edition itself
+/// (for its ambience).
+pub struct Region {
+    pub centre: Vec2,
+    pub id: RegionId,
+    pub props: Props,
+    pub edition: Edition,
+    relief: Program,
+    relief_range: (f64, f64),
+    paint: Program,
+    palette: Palette,
+    paint_range: (f64, f64),
+}
+
+impl Region {
+    /// Canvas coordinates (0–1) of a world point, clamped to the canvas.
+    fn canvas(&self, p: Vec2) -> (f64, f64) {
+        let u = ((p - self.centre) / CANVAS + 0.5).clamp(Vec2::ZERO, Vec2::ONE);
+        (u.x as f64, u.y as f64)
+    }
+
+    /// Influence at a world point, 0–1.
+    pub fn weight(&self, p: Vec2) -> f32 {
+        let d = p.distance(self.centre) / REGION;
+        (-d * d * FALLOFF).exp()
+    }
+
+    /// Index of the ambience render, if the work has one.
+    pub fn ambience(&self) -> Option<usize> {
+        self.edition.renders.iter().position(|r| r.kind == "sound")
+    }
+}
+
+/// Fixed values measured the way alea measures an image's range: sampled on
+/// a grid over the canvas, ignoring the extreme 0.5 % at each end.
+fn measure(prog: &Program, slots: &mut [f64]) -> (f64, f64) {
+    let n = 48;
+    let mut v: Vec<f64> = (0..n * n)
+        .map(|i| {
+            prog.run(
+                slots,
+                ((i % n) as f64 + 0.5) / n as f64,
+                ((i / n) as f64 + 0.5) / n as f64,
+            )
+        })
+        .filter(|v| v.is_finite())
+        .collect();
+    if v.is_empty() {
+        return (0.0, 1.0);
+    }
+    v.sort_by(|a, b| a.total_cmp(b));
+    let (lo, hi) = (v[v.len() / 200], v[v.len() - 1 - v.len() / 200]);
+    if hi - lo < 1e-9 {
+        (lo, lo + 1.0)
+    } else {
+        (lo, hi)
+    }
+}
+
+/// All the land works and the regions resolved so far, shared by every
+/// thread that samples the terrain.
+pub struct Land {
+    pub seed: u64,
+    pub works: Vec<LandWork>,
+    perm: [u8; 512],
+    regions: Mutex<HashMap<IVec2, Arc<Region>>>,
+    /// Works that failed to draw, reported once.
+    failed: Mutex<Vec<String>>,
+}
+
+impl Land {
+    pub fn load(seed: u64) -> Self {
+        Self::load_from(seed, &land_dir())
+    }
+
+    pub fn load_from(seed: u64, dir: &Path) -> Self {
+        let mut works = Vec::new();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|d| {
+                d.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "alea"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        for path in files {
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            match library::load(&path.to_string_lossy()) {
+                Ok(module) => {
+                    let anchor = match name.as_str() {
+                        "marsh" => Vec2::new(-0.35, -0.25),
+                        "fungal" => Vec2::new(0.35, -0.3),
+                        "bones" => Vec2::new(0.4, 0.35),
+                        "crystal" => Vec2::new(-0.4, 0.4),
+                        "monoliths" => Vec2::new(0.0, 0.62),
+                        other => {
+                            // Extra works get a spot of their own on the circle.
+                            let a = (hash(&[other.len() as i64, fnv(other.as_bytes()) as i64])
+                                % 360) as f32;
+                            Vec2::new(a.to_radians().cos(), a.to_radians().sin()) * 0.5
+                        }
+                    };
+                    works.push(LandWork {
+                        props: Props::for_work(&name),
+                        name,
+                        src: module.src.clone(),
+                        module,
+                        anchor,
+                    });
+                }
+                Err(e) => warn!("alea land work {}: {}", path.display(), e.display("", "")),
+            }
+        }
+        if works.is_empty() {
+            warn!(
+                "no land works in {}: the world will be a flat plain",
+                dir.display()
+            );
+        } else {
+            info!(
+                "land works: {}",
+                works
+                    .iter()
+                    .map(|w| w.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        // Seeded permutation for the climate noise.
         let mut p: Vec<u8> = (0..=255).collect();
         let mut s = seed ^ 0x9E37_79B9_7F4A_7C15;
         for i in (1..256).rev() {
@@ -106,12 +246,14 @@ impl Terrain {
             perm[i] = p[i & 255];
         }
         Self {
+            seed,
+            works,
             perm,
-            flatten: Vec::new(),
+            regions: Mutex::new(HashMap::new()),
+            failed: Mutex::new(Vec::new()),
         }
     }
 
-    /// Classic 2D gradient noise, in −1..1.
     fn noise(&self, x: f32, y: f32) -> f32 {
         let (xi, yi) = (x.floor(), y.floor());
         let (xf, yf) = (x - xi, y - yi);
@@ -138,11 +280,9 @@ impl Terrain {
         lerp(x1, x2, v) * std::f32::consts::FRAC_1_SQRT_2 * 1.4
     }
 
-    /// Fractal sum of `octaves` noise layers, roughly −1..1.
-    pub fn fbm(&self, x: f32, y: f32, octaves: u32) -> f32 {
+    fn fbm(&self, x: f32, y: f32, octaves: u32) -> f32 {
         let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
         for o in 0..octaves {
-            // Offset each octave so they don't line up at the origin.
             let off = o as f32 * 37.13;
             sum += amp * self.noise(x * freq + off, y * freq - off);
             norm += amp;
@@ -152,92 +292,277 @@ impl Terrain {
         sum / norm
     }
 
-    /// How much each biome is present at a point (sums to 1).
-    pub fn biome_weights(&self, x: f32, z: f32) -> [f32; 5] {
-        let warp = self.fbm(x / 900.0 + 11.0, z / 900.0 - 7.0, 2) * 0.35;
+    /// Which land work a region gets: the nearest anchor in climate space.
+    fn choose_work(&self, centre: Vec2) -> usize {
+        let (x, z) = (centre.x, centre.y);
+        let warp = self.fbm(x / 1800.0 + 11.0, z / 1800.0 - 7.0, 2) * 0.35;
         let c = Vec2::new(
-            self.fbm(x / 1400.0 + 3.1 + warp, z / 1400.0, 3),
-            self.fbm(x / 1400.0 - 5.7, z / 1400.0 + 9.2 + warp, 3),
+            self.fbm(x / 2800.0 + 3.1 + warp, z / 2800.0, 3),
+            self.fbm(x / 2800.0 - 5.7, z / 2800.0 + 9.2 + warp, 3),
         ) * 1.6;
-        let mut w = [0.0; 5];
-        let mut total = 0.0;
-        for (i, b) in Biome::ALL.iter().enumerate() {
-            let d = c.distance(b.anchor());
-            // Sharp-ish falloff: mostly one biome, soft borders.
-            let v = (-d * d * 22.0).exp();
-            w[i] = v;
-            total += v;
-        }
-        for v in &mut w {
-            *v /= total.max(1e-6);
-        }
-        w
-    }
-
-    pub fn biome(&self, x: f32, z: f32) -> Biome {
-        let w = self.biome_weights(x, z);
         let mut best = 0;
-        for i in 1..5 {
-            if w[i] > w[best] {
+        let mut best_d = f32::MAX;
+        for (i, w) in self.works.iter().enumerate() {
+            let d = c.distance(w.anchor);
+            if d < best_d {
+                best_d = d;
                 best = i;
             }
         }
-        Biome::ALL[best]
+        best
     }
 
-    fn biome_height(&self, b: Biome, x: f32, z: f32) -> f32 {
-        match b {
-            // Barely above the water, pocked with pools.
-            Biome::Marsh => 0.1 + 4.5 * self.fbm(x / 55.0, z / 55.0, 4),
-            // Rounded hills.
-            Biome::Fungal => 4.0 + 9.0 * self.fbm(x / 140.0 + 4.0, z / 140.0, 4),
-            // Long dunes: stretched noise plus a ripple.
-            Biome::Bones => {
-                let d = self.fbm(x / 220.0, z / 70.0 + 2.0, 3);
-                6.0 + 10.0 * d + 1.2 * ((x * 0.07 + d * 3.0).sin())
+    /// The region at grid coordinates, resolving it on first use.
+    pub fn region(&self, coord: IVec2) -> Option<Arc<Region>> {
+        if self.works.is_empty() {
+            return None;
+        }
+        if let Some(r) = self.regions.lock().unwrap().get(&coord) {
+            return Some(r.clone());
+        }
+        let r = Arc::new(self.resolve(coord));
+        self.regions
+            .lock()
+            .unwrap()
+            .entry(coord)
+            .or_insert(r)
+            .clone()
+            .into()
+    }
+
+    fn resolve(&self, coord: IVec2) -> Region {
+        let h = hash(&[self.seed as i64, coord.x as i64, coord.y as i64]);
+        let jitter = Vec2::new(
+            ((h & 0xffff) as f32 / 65535.0 - 0.5) * 0.4,
+            (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * 0.4,
+        );
+        let centre = (coord.as_vec2() + 0.5 + jitter) * REGION;
+        let wi = self.choose_work(centre);
+        let work = &self.works[wi];
+        let seed = (h >> 32) & 0xffff_ffff;
+        let id = RegionId {
+            work: work.name.clone(),
+            seed,
+        };
+
+        match self.draw(work, seed) {
+            Ok((edition, relief, relief_range, paint, palette, paint_range)) => Region {
+                centre,
+                id,
+                props: work.props,
+                edition,
+                relief,
+                relief_range,
+                paint,
+                palette,
+                paint_range,
+            },
+            Err(msg) => {
+                let mut failed = self.failed.lock().unwrap();
+                if !failed.contains(&work.name) {
+                    warn!("alea: land work `{}` could not be drawn:\n{msg}", work.name);
+                    failed.push(work.name.clone());
+                }
+                self.flat(centre, id, work.props)
             }
-            // A plateau with terraces.
-            Biome::Crystal => {
-                // Terraces 3 m high: steep risers, but continuous (a floor()
-                // would tear the mesh).
-                let h = 9.0 + 7.0 * self.fbm(x / 180.0 - 3.0, z / 180.0, 3);
-                let t = h / 3.0;
-                let step = t.floor() + smoothstep(0.35, 0.65, t - t.floor());
-                step * 3.0
-            }
-            // A dark basin, just under the plain around it.
-            Biome::Monoliths => 0.8 + 1.5 * self.fbm(x / 90.0, z / 90.0, 2),
         }
     }
 
-    /// Height before flattening.
-    fn raw_height(&self, x: f32, z: f32) -> f32 {
-        let w = self.biome_weights(x, z);
-        let mut h = 0.0;
-        for (i, b) in Biome::ALL.iter().enumerate() {
-            if w[i] > 0.01 {
-                h += w[i] * self.biome_height(*b, x, z);
+    #[allow(clippy::type_complexity)]
+    fn draw(
+        &self,
+        work: &LandWork,
+        seed: u64,
+    ) -> Result<(Edition, Program, (f64, f64), Program, Palette, (f64, f64)), String> {
+        let m = &work.module;
+        let show = |e: alea::error::Error| e.display(&m.src, &m.file);
+        let edition = eval::resolve(m, seed).map_err(show)?;
+        media::validate(&edition).map_err(show)?;
+        let images: Vec<&eval::Render> = edition
+            .renders
+            .iter()
+            .filter(|r| r.kind == "image")
+            .collect();
+        let relief_r = images
+            .first()
+            .ok_or("a land work needs a `render image` for its relief")?;
+        let paint_r = images.get(1).copied().unwrap_or(relief_r);
+        let compile = |r: &eval::Render| -> Result<(Program, Palette, (f64, f64)), String> {
+            let spec = media::image_spec(r).map_err(show)?;
+            let field = r.required_field(0, "the field").map_err(show)?;
+            let prog = Program::new(field, edition.seed);
+            let range = match spec.range {
+                Some(r) => r,
+                None => measure(&prog, &mut prog.slots(spec.at)),
+            };
+            Ok((prog, spec.stops, range))
+        };
+        let (relief, _, relief_range) = compile(relief_r)?;
+        let (paint, palette, paint_range) = compile(paint_r)?;
+        Ok((edition, relief, relief_range, paint, palette, paint_range))
+    }
+
+    /// A fallback region: a flat plain, for a work that failed to draw.
+    fn flat(&self, centre: Vec2, id: RegionId, props: Props) -> Region {
+        let field = eval::Field::Const(0.35);
+        let edition = Edition {
+            name: id.work.clone(),
+            seed: id.seed,
+            attempts: 1,
+            renders: Vec::new(),
+            inputs: Vec::new(),
+        };
+        Region {
+            centre,
+            id,
+            props,
+            edition,
+            relief: Program::new(&field, 0),
+            relief_range: (0.0, 1.0),
+            paint: Program::new(&field, 0),
+            palette: Palette {
+                colors: vec![[40, 36, 44], [90, 80, 96]],
+                positions: None,
+                bands: 0,
+            },
+            paint_range: (0.0, 1.0),
+        }
+    }
+
+    /// The region whose influence is strongest at a point.
+    pub fn region_at(&self, p: Vec2) -> Option<Arc<Region>> {
+        let cell = (p / REGION).floor().as_ivec2();
+        let mut best: Option<(f32, Arc<Region>)> = None;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                if let Some(r) = self.region(cell + IVec2::new(dx, dz)) {
+                    let w = r.weight(p);
+                    if best.as_ref().is_none_or(|(bw, _)| w > *bw) {
+                        best = Some((w, r));
+                    }
+                }
             }
         }
-        // Lake basins, cutting across biomes (not the crystal plateau).
-        let basin = smoothstep(0.08, 0.38, self.fbm(x / 520.0 + 17.0, z / 520.0 - 3.0, 3));
-        h -= basin * 14.0 * (1.0 - w[3]);
-        // A rare ridge system crossing everything, for scale.
-        let ridge = 1.0 - self.fbm(x / 1100.0 - 21.0, z / 1100.0 + 4.0, 3).abs() * 4.0;
-        h + ridge.max(0.0).powi(3) * 28.0
+        best.map(|(_, r)| r)
+    }
+}
+
+/// A set of regions with scratch space, for sampling without locks: made
+/// on the main thread, used on any.
+pub struct Sampler {
+    regions: Vec<(Arc<Region>, Vec<f64>, Vec<f64>)>,
+    flatten: Vec<Flatten>,
+}
+
+impl Sampler {
+    fn raw_height(&mut self, p: Vec2) -> f32 {
+        let (mut h, mut total) = (0.0, 0.0);
+        for (r, relief_slots, _) in &mut self.regions {
+            let w = r.weight(p);
+            if w < 0.003 {
+                continue;
+            }
+            let (u, v) = r.canvas(p);
+            let val = r.relief.run(relief_slots, u, v);
+            let (lo, hi) = r.relief_range;
+            let t = (((val - lo) / (hi - lo)) as f32).clamp(0.0, 1.0);
+            h += w * (t - SHORE) * RELIEF_M;
+            total += w;
+        }
+        if total <= 0.0 { 2.0 } else { h / total }
     }
 
     /// Terrain height at a point.
-    pub fn height(&self, x: f32, z: f32) -> f32 {
-        let mut h = self.raw_height(x, z);
+    pub fn height(&mut self, x: f32, z: f32) -> f32 {
+        let p = Vec2::new(x, z);
+        let mut h = self.raw_height(p);
         for f in &self.flatten {
-            let d = Vec2::new(x, z).distance(f.centre);
+            let d = p.distance(f.centre);
             if d < f.radius * 1.8 {
                 let k = 1.0 - smoothstep(f.radius, f.radius * 1.8, d);
                 h = lerp(h, f.height, k);
             }
         }
         h
+    }
+
+    /// Ground colour at a point (sRGB bytes): the regions' paintings blended.
+    pub fn color(&mut self, x: f32, z: f32) -> [u8; 3] {
+        let p = Vec2::new(x, z);
+        let (mut c, mut total) = ([0.0f32; 3], 0.0f32);
+        for (r, _, paint_slots) in &mut self.regions {
+            let w = r.weight(p);
+            if w < 0.003 {
+                continue;
+            }
+            let (u, v) = r.canvas(p);
+            let val = r.paint.run(paint_slots, u, v);
+            let (lo, hi) = r.paint_range;
+            let t = ((val - lo) / (hi - lo)).clamp(0.0, 1.0);
+            let rgb = r.palette.color(t);
+            for k in 0..3 {
+                c[k] += w * rgb[k] as f32;
+            }
+            total += w;
+        }
+        if total <= 0.0 {
+            [60, 56, 64]
+        } else {
+            [
+                (c[0] / total).round() as u8,
+                (c[1] / total).round() as u8,
+                (c[2] / total).round() as u8,
+            ]
+        }
+    }
+}
+
+/// The world's shape for one seed: the land plus the discs kept flat.
+#[derive(Clone)]
+pub struct Terrain {
+    pub land: Arc<Land>,
+    pub flatten: Vec<Flatten>,
+}
+
+impl Terrain {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            land: Arc::new(Land::load(seed)),
+            flatten: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_dir(seed: u64, dir: &Path) -> Self {
+        Self {
+            land: Arc::new(Land::load_from(seed, dir)),
+            flatten: Vec::new(),
+        }
+    }
+
+    /// A sampler for everything within `radius` of `centre` (world xz).
+    /// Resolves the regions it needs, so call it on the main thread.
+    pub fn sampler(&self, centre: Vec2, radius: f32) -> Sampler {
+        let lo = ((centre - radius) / REGION).floor().as_ivec2() - IVec2::ONE;
+        let hi = ((centre + radius) / REGION).floor().as_ivec2() + IVec2::ONE;
+        let mut regions = Vec::new();
+        for z in lo.y..=hi.y {
+            for x in lo.x..=hi.x {
+                if let Some(r) = self.land.region(IVec2::new(x, z)) {
+                    let (rs, ps) = (r.relief.slots(0.0), r.paint.slots(0.0));
+                    regions.push((r, rs, ps));
+                }
+            }
+        }
+        Sampler {
+            regions,
+            flatten: self.flatten.clone(),
+        }
+    }
+
+    /// Terrain height at a point.
+    pub fn height(&self, x: f32, z: f32) -> f32 {
+        self.sampler(Vec2::new(x, z), 0.0).height(x, z)
     }
 
     /// What a flier or walker rests on: the ground, or the water surface.
@@ -249,34 +574,25 @@ impl Terrain {
         self.height(x, z) < SEA_LEVEL
     }
 
-    pub fn normal(&self, x: f32, z: f32) -> Vec3 {
-        let e = 0.8;
-        let dx = self.height(x + e, z) - self.height(x - e, z);
-        let dz = self.height(x, z + e) - self.height(x, z - e);
-        Vec3::new(-dx, 2.0 * e, -dz).normalize()
+    /// The props the land grows at a point.
+    pub fn props_at(&self, x: f32, z: f32) -> Props {
+        self.land
+            .region_at(Vec2::new(x, z))
+            .map(|r| r.props)
+            .unwrap_or(Props::None)
     }
 
-    /// Ground colour: biome blend, darker when wet, lighter on crests.
-    pub fn color(&self, x: f32, z: f32, h: f32) -> [f32; 4] {
-        let w = self.biome_weights(x, z);
-        let mut base = [0.0f32; 3];
-        let mut hi = [0.0f32; 3];
-        for (i, b) in Biome::ALL.iter().enumerate() {
-            let (g, l) = (b.ground(), b.highlight());
-            for c in 0..3 {
-                base[c] += w[i] * g[c];
-                hi[c] += w[i] * l[c];
-            }
-        }
-        let crest = smoothstep(-0.3, 0.6, self.fbm(x / 23.0, z / 23.0, 2));
-        let wet = 1.0 - smoothstep(SEA_LEVEL - 0.5, SEA_LEVEL + 1.5, h);
-        let mut out = [0.0; 4];
-        for c in 0..3 {
-            out[c] = lerp(base[c], hi[c], crest * 0.55) * (1.0 - 0.45 * wet);
-        }
-        out[3] = 1.0;
-        out
+    /// The land here, by name and edition.
+    pub fn region_at(&self, x: f32, z: f32) -> Option<Arc<Region>> {
+        self.land.region_at(Vec2::new(x, z))
     }
+}
+
+pub fn land_dir() -> PathBuf {
+    FileAssetReader::get_base_path()
+        .join("assets")
+        .join("alea")
+        .join("land")
 }
 
 /// A deterministic 64-bit hash of a few integers, for per-chunk seeds.
@@ -284,6 +600,14 @@ pub fn hash(parts: &[i64]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for p in parts {
         h = splitmix(h ^ (*p as u64));
+    }
+    h
+}
+
+fn fnv(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for b in bytes {
+        h = (h ^ *b as u64).wrapping_mul(0x100_0000_01b3);
     }
     h
 }
@@ -308,57 +632,98 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 mod tests {
     use super::*;
 
+    fn dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/alea/land")
+    }
+
     #[test]
     fn deterministic_per_seed() {
-        let (a, b, c) = (Terrain::new(7), Terrain::new(7), Terrain::new(8));
-        for i in 0..50 {
-            let (x, z) = (i as f32 * 37.3 - 900.0, i as f32 * -21.7 + 400.0);
+        let (a, b, c) = (
+            Terrain::from_dir(7, &dir()),
+            Terrain::from_dir(7, &dir()),
+            Terrain::from_dir(8, &dir()),
+        );
+        for i in 0..40 {
+            let (x, z) = (i as f32 * 137.3 - 2000.0, i as f32 * -91.7 + 400.0);
             assert_eq!(a.height(x, z), b.height(x, z));
         }
-        let differs = (0..50).any(|i| {
-            let (x, z) = (i as f32 * 37.3, i as f32 * 11.0);
+        let differs = (0..40).any(|i| {
+            let (x, z) = (i as f32 * 137.3, i as f32 * 41.0);
             a.height(x, z) != c.height(x, z)
         });
         assert!(differs, "different seeds must give different worlds");
     }
 
     #[test]
-    fn continuous_everywhere() {
-        // No seams: neighbouring samples never jump. Checked on a long walk,
-        // far from the origin too.
-        let t = Terrain::new(42);
-        let mut prev = t.height(-50_000.0, 1234.0);
+    fn continuous_across_regions() {
+        // No seams between regions or chunks: on a 5 km walk crossing many
+        // region borders, neighbouring 4 m samples never jump more than a
+        // terrace step (the crystal flats step by ~5 m).
+        let t = Terrain::from_dir(42, &dir());
+        let mut s = t.sampler(Vec2::new(0.0, 0.0), 6000.0);
+        let mut prev = s.height(-2500.0, 300.0);
         let mut worst: f32 = 0.0;
-        for i in 1..20_000 {
-            let x = -50_000.0 + i as f32 * 5.0;
-            let h = t.height(x, 1234.0 + (i as f32 * 0.01).sin() * 300.0);
+        for i in 1..1250 {
+            let x = -2500.0 + i as f32 * 4.0;
+            let h = s.height(x, 300.0 + (i as f32 * 0.01).sin() * 400.0);
             worst = worst.max((h - prev).abs());
             prev = h;
         }
-        assert!(worst < 4.0, "height jumped by {worst} m between 5 m steps");
+        assert!(worst < 9.0, "height jumped by {worst} m between 4 m steps");
     }
 
     #[test]
-    fn has_every_biome_and_water() {
-        let t = Terrain::new(2026);
+    fn every_land_work_is_used_and_there_is_water() {
+        let t = Terrain::from_dir(2026, &dir());
+        assert!(t.land.works.len() >= 5, "shipped land works missing");
         let mut seen = std::collections::HashSet::new();
-        let mut water = 0;
-        let n = 120;
-        for i in 0..n {
-            for j in 0..n {
-                let (x, z) = (i as f32 * 150.0 - 9000.0, j as f32 * 150.0 - 9000.0);
-                seen.insert(t.biome(x, z));
-                water += t.is_water(x, z) as usize;
+        let (mut water, mut n) = (0, 0);
+        for i in 0..24 {
+            for j in 0..24 {
+                let p = Vec2::new(i as f32 - 12.0, j as f32 - 12.0) * REGION + REGION * 0.5;
+                let r = t.land.region_at(p).unwrap();
+                seen.insert(r.id.work.clone());
+                water += t.is_water(p.x, p.y) as usize;
+                n += 1;
             }
         }
-        assert_eq!(seen.len(), 5, "biomes seen: {seen:?}");
-        let frac = water as f32 / (n * n) as f32;
-        assert!((0.03..0.45).contains(&frac), "water fraction {frac}");
+        for w in &t.land.works {
+            assert!(
+                seen.contains(&w.name),
+                "land work `{}` never appears",
+                w.name
+            );
+        }
+        let frac = water as f32 / n as f32;
+        assert!((0.03..0.6).contains(&frac), "water fraction {frac}");
+    }
+
+    #[test]
+    fn editions_differ_between_regions() {
+        let t = Terrain::from_dir(3, &dir());
+        let a = t.land.region(IVec2::new(0, 0)).unwrap();
+        let b = t.land.region(IVec2::new(5, -3)).unwrap();
+        assert_ne!(a.id.seed, b.id.seed);
+        assert!(a.ambience().is_some(), "shipped works carry an ambience");
+    }
+
+    #[test]
+    fn colours_come_from_the_painting() {
+        let t = Terrain::from_dir(11, &dir());
+        let mut s = t.sampler(Vec2::ZERO, 300.0);
+        let cols: std::collections::HashSet<[u8; 3]> = (0..200)
+            .map(|i| s.color(i as f32 * 3.1, (i * 7) as f32 % 250.0))
+            .collect();
+        assert!(
+            cols.len() > 20,
+            "ground painting is flat: {} colours",
+            cols.len()
+        );
     }
 
     #[test]
     fn flatten_holds_its_height() {
-        let mut t = Terrain::new(3);
+        let mut t = Terrain::from_dir(3, &dir());
         t.flatten.push(Flatten {
             centre: Vec2::new(100.0, -40.0),
             radius: 20.0,
@@ -368,34 +733,28 @@ mod tests {
             assert!((t.height(100.0 + dx, -40.0 + dz) - 2.5).abs() < 1e-4);
         }
     }
-}
 
-#[cfg(test)]
-mod survey {
-    use super::*;
-    /// `cargo test survey -- --ignored --nocapture`: biome / water statistics.
     #[test]
-    #[ignore]
-    fn print_survey() {
-        let t = Terrain::new(2026);
-        let mut counts = std::collections::HashMap::new();
-        let (mut water, mut hmin, mut hmax) = (0, f32::MAX, f32::MIN);
-        let n = 200;
-        for i in 0..n {
-            for j in 0..n {
-                let (x, z) = (i as f32 * 100.0 - 10000.0, j as f32 * 100.0 - 10000.0);
-                *counts.entry(t.biome(x, z)).or_insert(0) += 1;
-                let h = t.height(x, z);
-                hmin = hmin.min(h);
-                hmax = hmax.max(h);
-                water += (h < SEA_LEVEL) as usize;
-            }
-        }
-        eprintln!(
-            "biomes {counts:?}\nwater {:.1}%  height {hmin:.1}..{hmax:.1}",
-            water as f32 * 100.0 / (n * n) as f32
-        );
-        let c = Vec2::new(t.fbm(3.1, 0.0, 3), t.fbm(-5.7, 9.2, 3));
-        eprintln!("climate sample {c:?}");
+    fn broken_or_missing_works_fall_back_to_a_plain() {
+        let tmp = std::env::temp_dir().join(format!("ephemera-land-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(
+            tmp.join("broken.alea"),
+            "work Broken { render image(circle( }",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("nopic.alea"),
+            "work NoPic { render sound(drone(clouds()), duration: 1) }",
+        )
+        .unwrap();
+        let t = Terrain::from_dir(1, &tmp);
+        // `broken` fails to load; `nopic` loads but can't be drawn as land.
+        assert_eq!(t.land.works.len(), 1);
+        let h = t.height(10.0, 10.0);
+        assert!(h.is_finite());
+        assert_eq!(t.props_at(10.0, 10.0), Props::None);
+        let empty = Terrain::from_dir(1, &tmp.join("nothing"));
+        assert!(empty.height(0.0, 0.0).is_finite());
     }
 }

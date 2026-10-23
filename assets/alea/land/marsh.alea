@@ -1,0 +1,34 @@
+// Marsh — the tribe's home ground: flat, wet, pocked with pools.
+//
+// A land work is read by the game as:
+//   1st render image  = the relief. The picture is the land: black is the
+//                       lake bottom (−18 m), 30 % grey the shoreline, white
+//                       the peaks (+42 m). Keep `range: [0, 1]` to be literal.
+//   2nd render image  = the ground painting (optional; else the relief's).
+//   render sound      = the region's ambience, looped.
+
+work Marsh {
+  let low   = clouds(scale: 5) * 0.5 + warp(clouds(scale: 2), amount: 0.1) * 0.5
+  // Pools wherever a second noise peaks: one evaluation, any number of pools.
+  // (A merge of many blobs looks the same and costs a blob per point.)
+  let pools = smoothstep(0.58, 0.68, clouds(scale: ~between(6, 9), detail: 3))
+  let channels = smoothstep(0.42, 0.5, abs(noise(x * 3, y * 3, 0)))   // meanders
+
+  field relief = 0.33 + 0.13 * low - 0.22 * pools - 0.06 * (1 - channels)
+  render image(relief, range: [0, 1],
+               palette: ["#000000", "#2a2630", "#4c4a3a", "#8a8f6a", "#e8e4c8"])
+
+  // Wet mud, reed shadows and drifting spores on the ground.
+  let mud = low * 0.5 + grain(0.12) * 0.3 + dots(count: 40, size: 0.25, softness: 0.3) * 0.2
+  render image(mud, palette: ["#15110f", "#2d2820", "#3f4a30", "#5a7a48"])
+
+  // Rain on water, a reed drone, crickets.
+  pattern crickets = repeat ~poisson(40) event(size: ~between(0.002, 0.006),
+                                               intensity: ~between(0.2, 0.6),
+                                               y: ~between(0.7, 1.0))
+  render sound(texture(low, kind: "rain", gain: 0.6),
+               texture(pools, kind: "wind", gain: 0.25),
+               drone(low, voices: 4, instrument: "reed", scale: "pentatonic", key: "D2", gain: 0.5),
+               notes(crickets, instrument: "tick", scale: "pentatonic", key: "D6", gain: 0.35),
+               duration: 20, room: 0.35)
+}

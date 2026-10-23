@@ -23,6 +23,11 @@ work Monolith {
   output column * (0.45 + 0.55 * climb) + veins * 0.35
 
   // A fixed range: measuring it over the animation costs far more than drawing.
+  // Its hum: the carving, sung low.
+  render sound(drone(column, voices: 3, instrument: "organ", scale: "phrygian", key: "A1", gain: 0.6),
+               texture(veins, kind: "crackle", gain: 0.25),
+               duration: 10, room: 0.6)
+
   render video(output, duration: 4, fps: 12, width: 256, height: 768, format: "gif",
                range: [0, 1.15],
                palette: choose {

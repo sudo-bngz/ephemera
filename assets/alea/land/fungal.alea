@@ -1,0 +1,27 @@
+// Fungal bloom — rolling hills under giant glowing mushrooms, one dark lake.
+
+work Fungal {
+  let hills = warp(clouds(scale: 3), amount: 0.08)
+  let lake  = blob(x: ~between(0.15, 0.85), y: ~between(0.15, 0.85),
+                   size: ~between(0.18, 0.3), wobble: 0.4, softness: 0.08)
+
+  field relief = 0.36 + 0.4 * hills - 0.3 * lake
+  render image(relief, range: [0, 1],
+               palette: ["#000000", "#1c1226", "#3a2448", "#7a4c8a", "#f0d8ff"])
+
+  // Mycelium threads on violet soil, lit from under the caps.
+  let threads = smoothstep(0.47, 0.5, abs(noise(x * 9, y * 9, 1))) * 0.35
+  let soil    = clouds(scale: 6) * 0.5 + threads + grain(0.08)
+  render image(soil, palette: ["#1a1020", "#2f1a3a", "#5c2d6a", "#b36ad4", "#e8c4ff"])
+
+  // A slow choir in the dark; kalimba drips; spores on the wind.
+  pattern drips = repeat ~poisson(16) event(size: ~between(0.006, 0.014), intensity: ~between(0.3, 0.7))
+  let spore = synth {
+    let env = adsr(attack: 1.8, decay: 0.8, sustain: 0.7, release: 2.5)
+    lowpass(saw() + saw(note.freq * ~around(1.0, 0.005)), cutoff: 180 + 1400 * note.level, resonance: 0.3) * env
+  }
+  render sound(drone(hills, voices: 5, instrument: spore, scale: "dorian", key: "F2", gain: 0.6),
+               notes(drips, instrument: "kalimba", scale: "dorian", key: "F4", gain: 0.45),
+               texture(hills, kind: "wind", gain: 0.3),
+               duration: 20, room: 0.5)
+}

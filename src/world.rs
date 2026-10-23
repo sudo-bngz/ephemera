@@ -20,14 +20,20 @@ use rand::{Rng, SeedableRng};
 use crate::art::{Art, Landmark, Work};
 use crate::components::{CameraTarget, PhaseScoped};
 use crate::models::{ModelKind, Swappable};
-use crate::terrain::{Biome, Flatten, SEA_LEVEL, Terrain, hash};
+use crate::terrain::{Flatten, Props, SEA_LEVEL, Sampler, Terrain, hash};
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{ImageSampler, ImageSamplerDescriptor};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 
 pub const CHUNK: f32 = 128.0;
 const GRID: usize = 32;
+/// Ground painting texels per chunk side (1.33 m each).
+const TEXELS: usize = 96;
+/// Chunk builds in flight at once.
+const IN_FLIGHT: usize = 6;
 /// Chunks kept around the focus (radius, in chunks).
 const VIEW_RADIUS: i32 = 4;
-/// Chunks built per frame once the area around the player exists.
-const BUILD_BUDGET: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mood {
@@ -72,11 +78,17 @@ pub struct WorldTerrain(pub Terrain);
 pub struct WorldGen {
     pub seed: u64,
     loaded: HashMap<IVec2, Entity>,
+    pending: HashMap<IVec2, Task<ChunkData>>,
     clear_cells: HashMap<IVec2, Vec<Vec2>>,
     clear_radius: f32,
 }
 
 impl WorldGen {
+    /// Chunk builds in flight.
+    pub fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
     #[cfg_attr(not(test), allow(dead_code))] // read by the streaming tests
     pub fn loaded(&self) -> impl Iterator<Item = &IVec2> {
         self.loaded.keys()
@@ -159,7 +171,6 @@ pub struct WetlandAssets {
     pub reed_mat_tall: Handle<StandardMaterial>,
     pub water_mesh: Handle<Mesh>,
     pub water_mat: Handle<StandardMaterial>,
-    pub terrain_mat: Handle<StandardMaterial>,
     pub spore_mesh: Handle<Mesh>,
     pub spore_mat: Handle<StandardMaterial>,
     pub pad_mesh: Handle<Mesh>,
@@ -266,11 +277,6 @@ fn setup_assets(
             metallic: 0.1,
             ..default()
         }),
-        terrain_mat: materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.95,
-            ..default()
-        }),
         spore_mesh: meshes.add(Sphere::new(0.18).mesh().ico(1).unwrap()),
         spore_mat: materials.add(StandardMaterial {
             base_color: Color::srgb(0.6, 1.0, 0.85),
@@ -328,6 +334,8 @@ pub fn spawn_world(
     let palette = crate::sky::SkyPalette::for_mood(setup.mood);
     let mut terrain = Terrain::new(setup.seed);
     terrain.flatten = setup.flatten.clone();
+    // Pay for the regions around the start now, not during the first frames.
+    let _ = terrain.sampler(Vec2::ZERO, CHUNK * (VIEW_RADIUS as f32 + 1.0));
 
     let mut clear_cells: HashMap<IVec2, Vec<Vec2>> = HashMap::new();
     for p in &setup.keep_clear {
@@ -340,6 +348,7 @@ pub fn spawn_world(
     commands.insert_resource(WorldGen {
         seed: setup.seed,
         loaded: HashMap::new(),
+        pending: HashMap::new(),
         clear_cells,
         clear_radius: setup.keep_clear_radius.min(32.0),
     });
@@ -378,81 +387,159 @@ pub fn spawn_world(
             Transform::from_xyz(0.0, 8.0, 16.0).looking_at(Vec3::ZERO, Vec3::Y),
             palette.fog(),
             crate::camera::ChaseCamera::default(),
+            // Where the world is heard from.
+            bevy::audio::SpatialListener::new(0.6),
         ))
         .id();
     (cam, terrain)
 }
 
-fn terrain_mesh(t: &Terrain, coord: IVec2) -> (Mesh, f32) {
-    let n = GRID + 1;
-    let step = CHUNK / GRID as f32;
-    let origin = coord.as_vec2() * CHUNK;
-    // Heights on the grid plus a one-cell border, sampled once: normals come
-    // from neighbouring samples (central differences), and the border makes
-    // them match across chunk edges exactly.
-    let m = n + 2;
-    let mut hs = vec![0.0f32; m * m];
-    for j in 0..m {
-        for i in 0..m {
-            let wx = origin.x + (i as f32 - 1.0) * step;
-            let wz = origin.y + (j as f32 - 1.0) * step;
-            hs[j * m + i] = t.height(wx, wz);
-        }
-    }
-    let at = |i: usize, j: usize| hs[(j + 1) * m + (i + 1)];
-    let mut positions = Vec::with_capacity(n * n);
-    let mut normals = Vec::with_capacity(n * n);
-    let mut colors = Vec::with_capacity(n * n);
-    let mut uvs = Vec::with_capacity(n * n);
-    let mut min_h = f32::MAX;
-    for j in 0..n {
-        for i in 0..n {
-            let (lx, lz) = (i as f32 * step, j as f32 * step);
-            let h = at(i, j);
-            min_h = min_h.min(h);
-            let dx = hs[(j + 1) * m + (i + 2)] - hs[(j + 1) * m + i];
-            let dz = hs[(j + 2) * m + (i + 1)] - hs[j * m + (i + 1)];
-            positions.push([lx, h, lz]);
-            normals.push(Vec3::new(-dx, 2.0 * step, -dz).normalize().to_array());
-            colors.push(t.color(origin.x + lx, origin.y + lz, h));
-            uvs.push([i as f32 / GRID as f32, j as f32 / GRID as f32]);
-        }
-    }
-    let mut indices = Vec::with_capacity(GRID * GRID * 6);
-    for j in 0..GRID {
-        for i in 0..GRID {
-            let a = (j * n + i) as u32;
-            let (b, c, d) = (a + n as u32, a + 1, a + n as u32 + 1);
-            indices.extend_from_slice(&[a, b, c, c, b, d]);
-        }
-    }
-    let mesh = Mesh::new(
-        bevy::mesh::PrimitiveTopology::TriangleList,
-        bevy::asset::RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_indices(bevy::mesh::Indices::U32(indices));
-    (mesh, min_h)
+/// What a chunk build produces: ready to turn into a mesh and a texture.
+pub struct ChunkData {
+    coord: IVec2,
+    /// Heights on the grid plus a one-cell border, row-major, `(GRID + 3)²`.
+    heights: Vec<f32>,
+    texture: Vec<u8>,
+    min_h: f32,
 }
 
-/// Everything about one chunk, as a pure function of the seed and coords.
+impl ChunkData {
+    /// Height at a chunk-local position, from the sampled grid.
+    fn height_at(&self, lx: f32, lz: f32) -> f32 {
+        let m = GRID + 3;
+        let step = CHUNK / GRID as f32;
+        let (fx, fz) = (
+            (lx / step).clamp(0.0, GRID as f32),
+            (lz / step).clamp(0.0, GRID as f32),
+        );
+        let (i, j) = (fx.floor() as usize, fz.floor() as usize);
+        let (tx, tz) = (fx - i as f32, fz - j as f32);
+        let at = |i: usize, j: usize| self.heights[(j + 1) * m + (i + 1)];
+        let a = at(i, j) + (at(i + 1, j) - at(i, j)) * tx;
+        let b = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * tx;
+        a + (b - a) * tz
+    }
+
+    fn mesh(&self) -> Mesh {
+        let n = GRID + 1;
+        let m = GRID + 3;
+        let step = CHUNK / GRID as f32;
+        let hs = &self.heights;
+        let at = |i: usize, j: usize| hs[(j + 1) * m + (i + 1)];
+        let mut positions = Vec::with_capacity(n * n);
+        let mut normals = Vec::with_capacity(n * n);
+        let mut uvs = Vec::with_capacity(n * n);
+        for j in 0..n {
+            for i in 0..n {
+                let (lx, lz) = (i as f32 * step, j as f32 * step);
+                // Central differences on the border-padded grid: normals
+                // match exactly across chunk edges.
+                let dx = hs[(j + 1) * m + (i + 2)] - hs[(j + 1) * m + i];
+                let dz = hs[(j + 2) * m + (i + 1)] - hs[j * m + (i + 1)];
+                positions.push([lx, at(i, j), lz]);
+                normals.push(Vec3::new(-dx, 2.0 * step, -dz).normalize().to_array());
+                uvs.push([i as f32 / GRID as f32, j as f32 / GRID as f32]);
+            }
+        }
+        let mut indices = Vec::with_capacity(GRID * GRID * 6);
+        for j in 0..GRID {
+            for i in 0..GRID {
+                let a = (j * n + i) as u32;
+                let (b, c, d) = (a + n as u32, a + 1, a + n as u32 + 1);
+                indices.extend_from_slice(&[a, b, c, c, b, d]);
+            }
+        }
+        Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+    }
+
+    fn image(&self) -> Image {
+        let mut img = Image::new(
+            Extent3d {
+                width: TEXELS as u32,
+                height: TEXELS as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            self.texture.clone(),
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
+        img
+    }
+}
+
+/// Samples the terrain and paints the ground for one chunk. Pure: runs on
+/// the compute pool with a sampler made on the main thread.
+pub fn build_chunk(mut s: Sampler, coord: IVec2) -> ChunkData {
+    let m = GRID + 3;
+    let step = CHUNK / GRID as f32;
+    let origin = coord.as_vec2() * CHUNK;
+    let mut heights = vec![0.0f32; m * m];
+    let mut min_h = f32::MAX;
+    for j in 0..m {
+        for i in 0..m {
+            let h = s.height(
+                origin.x + (i as f32 - 1.0) * step,
+                origin.y + (j as f32 - 1.0) * step,
+            );
+            heights[j * m + i] = h;
+            if (1..m - 1).contains(&i) && (1..m - 1).contains(&j) {
+                min_h = min_h.min(h);
+            }
+        }
+    }
+    let mut texture = Vec::with_capacity(TEXELS * TEXELS * 4);
+    let texel = CHUNK / TEXELS as f32;
+    for j in 0..TEXELS {
+        for i in 0..TEXELS {
+            let c = s.color(
+                origin.x + (i as f32 + 0.5) * texel,
+                origin.y + (j as f32 + 0.5) * texel,
+            );
+            texture.extend_from_slice(&[c[0], c[1], c[2], 255]);
+        }
+    }
+    ChunkData {
+        coord,
+        heights,
+        texture,
+        min_h,
+    }
+}
+
+/// Turns a built chunk into entities: ground, water and props. Props are a
+/// pure function of the seed and coords too.
 fn spawn_chunk(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
     art: &mut Art,
     a: &WetlandAssets,
     t: &Terrain,
     wg: &WorldGen,
-    coord: IVec2,
+    data: ChunkData,
 ) -> Entity {
+    let coord = data.coord;
     let origin = coord.as_vec2() * CHUNK;
-    let (mesh, min_h) = terrain_mesh(t, coord);
+    let mesh = data.mesh();
+    let min_h = data.min_h;
+    let ground_mat = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        base_color_texture: Some(images.add(data.image())),
+        perceptual_roughness: 0.95,
+        ..default()
+    });
     let mut rng = StdRng::seed_from_u64(hash(&[wg.seed as i64, coord.x as i64, coord.y as i64]));
-    let centre_biome = t.biome(origin.x + CHUNK * 0.5, origin.y + CHUNK * 0.5);
+    let centre_biome = t.props_at(origin.x + CHUNK * 0.5, origin.y + CHUNK * 0.5);
 
     let root = commands
         .spawn((
@@ -467,10 +554,7 @@ fn spawn_chunk(
     let mut kids: Vec<Entity> = Vec::new();
     kids.push(
         commands
-            .spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(a.terrain_mat.clone()),
-            ))
+            .spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(ground_mat)))
             .id(),
     );
     if min_h < SEA_LEVEL {
@@ -493,7 +577,7 @@ fn spawn_chunk(
             rng.gen_range(2.0..CHUNK - 2.0),
         );
         let w = origin + l;
-        (l, w, t.height(w.x, w.y))
+        (l, w, data.height_at(l.x, l.y))
     };
     let flat_ok = |w: Vec2| {
         !t.flatten
@@ -505,11 +589,12 @@ fn spawn_chunk(
 
     // --- reeds: everywhere wet, densest in the marsh -----------------------
     let reed_count = match centre_biome {
-        Biome::Marsh => 24,
-        Biome::Fungal => 8,
-        Biome::Monoliths => 6,
-        Biome::Bones => 2,
-        Biome::Crystal => 0,
+        Props::Marsh => 24,
+        Props::Fungal => 8,
+        Props::Monoliths => 6,
+        Props::Bones => 2,
+        Props::Crystal => 0,
+        Props::None => 4,
     };
     for _ in 0..reed_count {
         let (l, w, h) = spot(&mut rng);
@@ -555,7 +640,7 @@ fn spawn_chunk(
 
     // --- biome features ------------------------------------------------------
     match centre_biome {
-        Biome::Fungal => {
+        Props::Fungal => {
             for _ in 0..6 {
                 let (l, w, h) = spot(&mut rng);
                 if h < SEA_LEVEL || !solid_ok(w) {
@@ -610,7 +695,7 @@ fn spawn_chunk(
                 kids.push(e);
             }
         }
-        Biome::Bones => {
+        Props::Bones => {
             for _ in 0..rng.gen_range(1..3) {
                 let (l, w, h) = spot(&mut rng);
                 if h < SEA_LEVEL || !solid_ok(w) {
@@ -630,7 +715,7 @@ fn spawn_chunk(
                     }
                     let taper = 1.0 - (k as f32 / ribs as f32 - 0.5).abs();
                     let r = size * (0.6 + 0.4 * taper);
-                    let gh = t.height(wp.x, wp.y);
+                    let gh = data.height_at(lp.x, lp.y);
                     // The rib's plane is perpendicular to the spine.
                     let e = commands
                         .spawn((
@@ -660,7 +745,7 @@ fn spawn_chunk(
                 }
             }
         }
-        Biome::Crystal => {
+        Props::Crystal => {
             for _ in 0..9 {
                 let (l, w, h) = spot(&mut rng);
                 if !solid_ok(w) {
@@ -705,7 +790,7 @@ fn spawn_chunk(
                 kids.push(e);
             }
         }
-        Biome::Monoliths => {
+        Props::Monoliths => {
             for _ in 0..3 {
                 let (l, w, h) = spot(&mut rng);
                 if !solid_ok(w) {
@@ -732,7 +817,7 @@ fn spawn_chunk(
                 ));
             }
         }
-        Biome::Marsh => {}
+        Props::Marsh | Props::None => {}
     }
 
     // --- landmarks anywhere (rarer outside the monolith field) ---------------
@@ -782,7 +867,9 @@ fn spawn_chunk(
     }
     if roll(&mut rng, 0.10) {
         let (l, w, h) = spot(&mut rng);
-        if h > SEA_LEVEL + 0.3 && t.normal(w.x, w.y).y > 0.97 {
+        let slope = (data.height_at(l.x + 2.0, l.y) - data.height_at(l.x - 2.0, l.y)).abs()
+            + (data.height_at(l.x, l.y + 2.0) - data.height_at(l.x, l.y - 2.0)).abs();
+        if h > SEA_LEVEL + 0.3 && slope < 1.0 && solid_ok(w) {
             let slot = rng.r#gen::<u64>();
             kids.push(sigil(
                 commands,
@@ -994,7 +1081,9 @@ pub(crate) fn sigil(
         .id()
 }
 
-/// Builds chunks around the focus, nearest first, and drops far ones.
+/// Builds chunks around the focus, nearest first, and drops far ones. The
+/// sampling and painting run on the compute pool; entities are spawned when
+/// a build lands.
 fn stream_chunks(
     mut commands: Commands,
     wg: Option<ResMut<WorldGen>>,
@@ -1003,6 +1092,7 @@ fn stream_chunks(
     mut art: ResMut<Art>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     focus: Query<&Transform, With<CameraTarget>>,
     cams: Query<&Transform, With<Camera3d>>,
 ) {
@@ -1043,29 +1133,43 @@ fn stream_chunks(
             commands.entity(e).despawn();
         }
     }
+    wg.pending.retain(|c, _| keep.contains(c));
 
-    // The ground under the player must exist right away; the rest streams.
-    let mut budget = BUILD_BUDGET;
-    for c in wanted {
-        if wg.loaded.contains_key(&c) {
-            continue;
+    // Land finished builds (polling a finished task takes its result).
+    let mut done = Vec::new();
+    for (c, task) in wg.pending.iter_mut() {
+        if let Some(data) = block_on(future::poll_once(task)) {
+            done.push((*c, data));
         }
-        let near = (c - centre).length_squared() <= 2;
-        if budget == 0 && !near {
-            break;
-        }
+    }
+    for (c, data) in done {
+        wg.pending.remove(&c);
         let e = spawn_chunk(
             &mut commands,
             &mut meshes,
             &mut materials,
+            &mut images,
             &mut art,
             &assets,
             &terrain.0,
             &wg,
-            c,
+            data,
         );
         wg.loaded.insert(c, e);
-        budget = budget.saturating_sub(1);
+    }
+
+    // Start new builds, nearest first.
+    for c in wanted {
+        if wg.loaded.contains_key(&c) || wg.pending.contains_key(&c) {
+            continue;
+        }
+        if wg.pending.len() >= IN_FLIGHT {
+            break;
+        }
+        let chunk_centre = (c.as_vec2() + 0.5) * CHUNK;
+        let sampler = terrain.0.sampler(chunk_centre, CHUNK);
+        let task = AsyncComputeTaskPool::get().spawn(async move { build_chunk(sampler, c) });
+        wg.pending.insert(c, task);
     }
 }
 
@@ -1135,12 +1239,45 @@ mod bench {
     #[test]
     #[ignore]
     fn chunk_cost() {
-        let t = crate::terrain::Terrain::new(2026);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/alea/land");
+        let t = crate::terrain::Terrain::from_dir(2026, &dir);
         let start = std::time::Instant::now();
-        let n = 40;
+        let n = 12;
         for i in 0..n {
-            let _ = super::terrain_mesh(&t, bevy::math::IVec2::new(i * 7 - 100, i * 3));
+            let c = bevy::math::IVec2::new(i * 7 - 40, i * 3);
+            let s = t.sampler((c.as_vec2() + 0.5) * super::CHUNK, super::CHUNK);
+            let _ = super::build_chunk(s, c);
         }
-        eprintln!("terrain mesh: {:?} per chunk", start.elapsed() / n as u32);
+        eprintln!(
+            "chunk build (heights + {0}x{0} painting): {1:?} per chunk",
+            super::TEXELS,
+            start.elapsed() / n as u32
+        );
+        // Split: heights only vs. one texel row of colour.
+        let c = bevy::math::IVec2::new(3, -2);
+        let mut sm = t.sampler((c.as_vec2() + 0.5) * super::CHUNK, super::CHUNK);
+        let t0 = std::time::Instant::now();
+        let mut acc = 0.0;
+        for i in 0..4096 {
+            acc += sm.height(
+                c.x as f32 * super::CHUNK + (i % 64) as f32 * 2.0,
+                c.y as f32 * super::CHUNK + (i / 64) as f32 * 2.0,
+            );
+        }
+        let th = t0.elapsed();
+        let t0 = std::time::Instant::now();
+        let mut acc2 = 0u32;
+        for i in 0..4096 {
+            acc2 += sm.color(
+                c.x as f32 * super::CHUNK + (i % 64) as f32 * 2.0,
+                c.y as f32 * super::CHUNK + (i / 64) as f32 * 2.0,
+            )[0] as u32;
+        }
+        let tc = t0.elapsed();
+        eprintln!(
+            "4096 heights {th:?} ({:.2} us each), 4096 colours {tc:?} ({:.2} us each) [{acc:.0} {acc2}]",
+            th.as_secs_f64() * 1e6 / 4096.0,
+            tc.as_secs_f64() * 1e6 / 4096.0
+        );
     }
 }

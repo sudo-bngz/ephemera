@@ -19,6 +19,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::art::Art;
+use crate::audio::{PlaySound, Sfx};
 use crate::camera::ChaseCamera;
 use crate::components::{CameraTarget, PhaseScoped, Velocity};
 use crate::creature::{Coat, Flap, spawn_ephemera};
@@ -128,6 +129,7 @@ pub struct Rider {
     buck_dir: f32,
     /// Seconds before another reed impact can cost speed again.
     bump_cooldown: f32,
+    was_boosting: bool,
 }
 
 #[derive(Component, Default, Debug, Clone, Copy)]
@@ -183,6 +185,11 @@ pub(crate) struct Race {
 }
 
 impl Rider {
+    /// Speed over top speed, 0–1 (over 1 when boosting).
+    pub(crate) fn speed_fraction(&self) -> f32 {
+        (self.speed / self.top_speed).max(0.0)
+    }
+
     /// Boost left, 0–1.
     pub(crate) fn boost_fraction(&self) -> f32 {
         (self.boost / self.boost_max).clamp(0.0, 1.0)
@@ -378,6 +385,7 @@ fn setup(
                     buck: 0.0,
                     buck_dir: 1.0,
                     bump_cooldown: 0.0,
+                    was_boosting: false,
                 },
                 Racer::new(name),
             ),
@@ -459,6 +467,7 @@ pub(crate) fn spawn_player_rider(
                 buck: 0.0,
                 buck_dir: 1.0,
                 bump_cooldown: 0.0,
+                was_boosting: false,
             },
         ),
     );
@@ -641,6 +650,7 @@ fn integrate(
     time: Res<Time>,
     mut race: ResMut<Race>,
     mut cams: Query<&mut ChaseCamera>,
+    mut sfx: MessageWriter<PlaySound>,
     mut q: Query<(
         &mut Transform,
         &mut Rider,
@@ -668,6 +678,7 @@ fn integrate(
             let refusal = (0.35 - r.trust).max(0.0) * 0.9;
             if race.rng.gen_bool((refusal as f64 * dt as f64).min(1.0)) {
                 r.buck = 0.7;
+                sfx.write(PlaySound(Sfx::Buck));
                 r.buck_dir = if race.rng.gen_bool(0.5) { 1.0 } else { -1.0 };
                 if let Ok(mut c) = cams.single_mut() {
                     c.kick(0.5);
@@ -680,10 +691,15 @@ fn integrate(
         // --- boost --------------------------------------------------------
         let boosting = input.boost && r.boost > 0.0 && !bucking && input.throttle >= 0.0;
         if boosting {
+            if is_player && !r.was_boosting {
+                sfx.write(PlaySound(Sfx::Boost));
+            }
             r.boost -= dt;
         } else {
             r.boost = (r.boost + dt * 0.22).min(r.boost_max);
         }
+
+        r.was_boosting = boosting;
 
         // --- terrain modifiers ---------------------------------------------
         let skimming = terrain.0.is_water(p.x, p.z) && p.y < SEA_LEVEL + 2.6;
@@ -817,6 +833,7 @@ fn integrate(
                 r.speed *= 1.0 - (0.10 + 0.30 * head_on);
                 r.bump_cooldown = 0.5;
                 if is_player {
+                    sfx.write(PlaySound(Sfx::Bump));
                     if let Ok(mut cam) = cams.single_mut() {
                         cam.kick(0.12 + 0.45 * head_on * speed_t);
                     }
@@ -861,6 +878,7 @@ fn gates(
     mut q: Query<(&Transform, &mut Racer, Option<&Player>)>,
     mut cams: Query<&mut ChaseCamera>,
     mut log: ResMut<RunLog>,
+    mut sfx: MessageWriter<PlaySound>,
 ) {
     let n = track.gates.len();
     for (tf, mut racer, player) in &mut q {
@@ -871,6 +889,9 @@ fn gates(
         let d = (g.xz() - tf.translation.xz()).length();
         let above = tf.translation.y - g.y;
         if d < GATE_RADIUS && (-2.0..GATE_HEIGHT).contains(&above) {
+            if player.is_some() {
+                sfx.write(PlaySound(Sfx::Gate));
+            }
             racer.next_gate = (racer.next_gate + 1) % n;
             if racer.next_gate == 0 {
                 let lap_time = race.clock - racer.lap_start;

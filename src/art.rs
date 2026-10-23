@@ -36,7 +36,7 @@ pub enum Work {
 }
 
 impl Work {
-    #[cfg(test)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const ALL: [Work; 4] = [Work::Monolith, Work::Veil, Work::Sigil, Work::Orb];
 
     pub fn file(self) -> &'static str {
@@ -198,6 +198,11 @@ impl Art {
         }
     }
 
+    /// Where a work's file is.
+    pub fn work_path(&self, work: Work) -> PathBuf {
+        self.dir.join(work.file())
+    }
+
     /// A new world: forget the old editions (their materials die with the
     /// entities that used them).
     pub fn reset(&mut self, world_seed: u64) {
@@ -267,7 +272,12 @@ pub fn render_frames(path: &Path, seed: u64, w: usize, h: usize, frames: usize) 
     let show = |e: alea::error::Error| e.display(&module.src, &module.file);
     let ed = eval::resolve(&module, seed).map_err(show)?;
     media::validate(&ed).map_err(show)?;
-    let r = ed.renders.first().ok_or("the work has no render")?;
+    // The first picture (image or video); a work may also carry a sound.
+    let r = ed
+        .renders
+        .iter()
+        .find(|r| r.kind == "image" || r.kind == "video")
+        .ok_or("the work has no `render image` or `render video`")?;
     let mut out = Vec::with_capacity(frames);
     match r.kind.as_str() {
         "image" => {

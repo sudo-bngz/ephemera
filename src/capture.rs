@@ -11,6 +11,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::art::Art;
+use crate::audio::{PlaySound, Sfx};
 use crate::camera::ChaseCamera;
 use crate::components::{CameraTarget, Ephemera, Judith, PhaseScoped, Velocity, spawn_judith};
 use crate::creature::{Coat, Flap, spawn_ephemera};
@@ -45,6 +46,8 @@ struct Capture {
     rng: StdRng,
     /// Outcome text for the banner.
     message: String,
+    /// A chime to play, sent by the `chime` system.
+    chime: Option<Sfx>,
 }
 
 #[derive(Component)]
@@ -126,6 +129,7 @@ fn setup(
         in_cover: false,
         rng: StdRng::seed_from_u64(42),
         message: String::new(),
+        chime: None,
     });
     log.capture_attempts += 1;
 
@@ -161,6 +165,7 @@ fn spook(
     cap.stage = Stage::Spooked(2.6);
     cap.awareness = 1.0;
     cap.message = message.into();
+    cap.chime = Some(Sfx::Spooked);
     log.creature_spooked += 1;
 }
 
@@ -286,6 +291,7 @@ fn throw_net(
     mut cap: ResMut<Capture>,
     judith: Query<&Transform, With<Judith>>,
     creature: Query<&Transform, With<Ephemera>>,
+    mut sfx: MessageWriter<PlaySound>,
 ) {
     if !matches!(cap.stage, Stage::Stalking) || !axes.action_pressed {
         return;
@@ -298,6 +304,7 @@ fn throw_net(
         return;
     }
     cap.stage = Stage::Netting(0.75);
+    sfx.write(PlaySound(Sfx::NetThrown));
     cap.message = String::new();
     commands.spawn((
         PhaseScoped,
@@ -335,6 +342,7 @@ fn resolve(
     mut cams: Query<&mut ChaseCamera>,
     mut stats: ResMut<EphemeraStats>,
     terrain: Res<WorldTerrain>,
+    mut sfx: MessageWriter<PlaySound>,
 ) {
     let dt = time.delta_secs();
     let Ok((mut etf, mut wild)) = creature.single_mut() else {
@@ -381,6 +389,7 @@ fn resolve(
                 if cap.awareness <= CATCH_THRESHOLD {
                     cap.stage = Stage::Caught(2.5);
                     cap.message = "CAUGHT!".into();
+                    sfx.write(PlaySound(Sfx::Caught));
                     // A calm catch starts the bond; a panicked one hurts it.
                     stats.trust = 0.25 - cap.awareness * 0.2;
                     stats.clamp();
@@ -423,6 +432,12 @@ fn resolve(
     }
 }
 
+fn chime(mut cap: ResMut<Capture>, mut sfx: MessageWriter<PlaySound>) {
+    if let Some(c) = cap.chime.take() {
+        sfx.write(PlaySound(c));
+    }
+}
+
 fn hud(cap: Res<Capture>, mut hud: ResMut<Hud>) {
     let bar = |v: f32, w: usize| -> String {
         let n = ((v * w as f32).round() as usize).min(w);
@@ -462,7 +477,7 @@ impl Plugin for CapturePlugin {
             .add_systems(OnExit(GamePhase::Capture), teardown)
             .add_systems(
                 Update,
-                (move_judith, sense, throw_net, fly_net, resolve)
+                (move_judith, sense, throw_net, fly_net, resolve, chime)
                     .chain()
                     .in_set(crate::GameSet::Simulation)
                     .run_if(in_state(GamePhase::Capture)),

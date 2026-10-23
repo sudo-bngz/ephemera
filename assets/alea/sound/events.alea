@@ -1,0 +1,26 @@
+// Events — the short sounds of the rite, one render each, in this order:
+//   0 gate passed   1 net thrown   2 caught   3 spooked
+//   4 bump          5 the creature bucks      6 boost
+//
+// alea fades every sound in over half a second, so each clip is 1.5 s with
+// its notes after the first third; the game trims the leading silence.
+
+work Events {
+  let s = 0.36   // where the fade-in has finished, in t
+  pattern gate    = repeat 3 event(t: s + i / n * 0.2, y: 0.55 + 0.15 * i / n, size: 0.015, intensity: 0.9)
+  pattern whoosh  = repeat 1 event(t: s, y: 0.2, size: 0.01, intensity: 0.8)
+  pattern caught  = repeat 6 event(t: s + i / n * 0.45, y: 0.3 + 0.6 * i / n, size: 0.02, intensity: 0.8)
+  pattern spooked = repeat 5 event(t: s + i / n * 0.4, y: 0.8 - 0.6 * i / n, size: 0.015, intensity: 0.9)
+  pattern bump    = repeat 2 event(t: s + i * 0.03, y: 0.1 + 0.2 * i, size: 0.02, intensity: 1.0)
+  pattern buck    = repeat 4 event(t: s + i / n * 0.35, y: 0.5 + 0.3 * (i % 2), size: 0.012, intensity: 0.9)
+  pattern boost   = repeat 8 event(t: s + i / n * 0.45, y: 0.2 + 0.7 * i / n, size: 0.006, intensity: 0.7)
+  let gust = smoothstep(s - 0.02, s, t) * (1 - smoothstep(s, s + 0.5, t))
+
+  render sound(notes(gate, instrument: "bell", scale: "major", key: "A4", gain: 0.8), duration: 1.5, room: 0.3)
+  render sound(texture(gust, kind: "wind", gain: 1.0), notes(whoosh, instrument: "wood", key: "A3", gain: 0.3), duration: 1.5, room: 0.1)
+  render sound(notes(caught, instrument: "glass", scale: "major", key: "A4", gain: 0.8), duration: 2.0, room: 0.4)
+  render sound(notes(spooked, instrument: "marimba", scale: "minor", key: "A3", gain: 0.8), duration: 1.5, room: 0.2)
+  render sound(notes(bump, instrument: "drum", key: "A4", gain: 1.0), notes(bump, instrument: "wood", key: "A2", gain: 0.6), duration: 1.5, room: 0.1)
+  render sound(notes(buck, instrument: "wood", scale: "chromatic", key: "A3", gain: 0.9), duration: 1.5, room: 0.1)
+  render sound(notes(boost, instrument: "tick", scale: "whole-tone", key: "A4", gain: 0.6), duration: 1.5, room: 0.2)
+}

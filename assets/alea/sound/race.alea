@@ -1,0 +1,21 @@
+// Race — the Gathering: a hard pulse, a saw bass, a chattering arp.
+// 8 bars at 128, so it loops every 15 s.
+
+work Race {
+  let m    = meter(tempo: 128, bars: 8)
+  let prog = chords(choose { "i VI III VII" | "i iv VI v" | "i VII VI VII" },
+                    key: "A2", scale: "minor", bars: m, repeat: 2)
+  let kick = steps("X...X...X...X..x", bars: m, y: 0.08)
+  let hat  = steps("..x...x...x...xx", bars: m, y: 0.9)
+  let bass = synth {
+    let env = adsr(attack: 0.005, decay: 0.15, sustain: 0.5, release: 0.1)
+    lowpass(saw() + saw(note.freq * 0.5), cutoff: 150 + 2500 * perc(release: 0.25), resonance: 0.4) * env
+  }
+  let bassline = euclid(hits: 11, steps: 16, bars: m, y: 0.1)
+  let chatter  = euclid(hits: choose { 7 | 9 | 13 }, steps: 16, rotate: 2, bars: m)
+  render sound(notes(kick, instrument: "drum", gain: 0.9, tempo: m.tempo),
+               notes(hat, instrument: "tick", gain: 0.5, tempo: m.tempo),
+               arp(prog, bassline, mode: "up", octaves: 1, instrument: bass, gain: 0.8),
+               arp(prog, chatter, mode: "random", octaves: 3, gate: 0.4, instrument: "pluck", gain: 0.45),
+               duration: m.length, room: 0.2)
+}
