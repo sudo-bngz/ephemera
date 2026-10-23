@@ -708,6 +708,72 @@ mod gltf_tests {
         assert!(h.distance(seat) < 0.05, "hips at {h}, saddle at {seat}");
     }
 
+    /// The horse rigged into her own skeleton and mesh: its triangles are
+    /// cut away, her measurements are hers, her hips go on the saddle.
+    #[test]
+    fn horse_in_her_own_skeleton_is_cut_away() {
+        use crate::anim::{Hips, ModelBounds};
+        let mut app = app();
+        let scene = load(&mut app, "rider_horse_one.glb");
+        let gltf: Handle<Gltf> = app
+            .world()
+            .resource::<AssetServer>()
+            .load("rider_horse_one.glb");
+        let mut models = Models::default().with(ModelKind::Judith, scene);
+        models.loaded[0].1.gltf = gltf;
+        app.insert_resource(models);
+        let mount = app
+            .world_mut()
+            .spawn((
+                Flap::default(),
+                ModelBounds {
+                    bottom: -1.5,
+                    top: 2.0,
+                    saddle: Vec3::new(0.0, 1.1, 0.3),
+                },
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        let judith = app
+            .world_mut()
+            .spawn((
+                Swappable::new(ModelKind::Judith),
+                Gait::default(),
+                Transform::default(),
+                Visibility::default(),
+                ChildOf(mount),
+            ))
+            .id();
+        assert!(run_until(&mut app, |w| w.get::<Hips>(judith).is_some()));
+        for _ in 0..30 {
+            app.update();
+        }
+        let w = app.world_mut();
+        let (mesh, hidden) = w
+            .query_filtered::<(&Mesh3d, &Visibility), With<bevy::mesh::skinning::SkinnedMesh>>()
+            .single(w)
+            .map(|(m, v)| (m.0.clone(), *v == Visibility::Hidden))
+            .unwrap();
+        assert!(!hidden, "she was hidden with her horse");
+        let mesh = w.resource::<Assets<Mesh>>().get(&mesh).unwrap();
+        // Her box: 20 triangles; the horse's 8 are gone.
+        assert_eq!(
+            mesh.indices().unwrap().len() / 3,
+            20,
+            "horse triangles left"
+        );
+        let b = w.get::<ModelBounds>(judith).unwrap();
+        assert!(
+            b.bottom > 1.0,
+            "measured with the horse: bottom {}",
+            b.bottom
+        );
+        let hips = w.get::<Hips>(judith).unwrap().0;
+        let name = w.get::<Name>(hips).map(|n| n.as_str().to_string());
+        assert_eq!(name.as_deref(), Some("Hips"));
+    }
+
     /// An auto-fitted slot: any model is scaled to the box the world asked
     /// for, bottom on the ground.
     #[test]

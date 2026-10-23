@@ -186,7 +186,7 @@ fn measure_models(
     players: Query<(), With<AnimationPlayer>>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform, Without<SwappedModel>>,
-    meshes: Res<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     gltfs: Res<Assets<Gltf>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     mut placements: Query<&mut Transform, With<SwappedModel>>,
@@ -218,6 +218,8 @@ fn measure_models(
             crate::models::ModelKind::Judith | crate::models::ModelKind::Villager
         );
         let mut hips = None;
+        // Vertices to leave out of the measuring (cut away with a prop).
+        let mut cut: std::collections::HashMap<Entity, Vec<bool>> = Default::default();
         if humanoid {
             let skinned: Vec<(Entity, &SkinnedMesh)> = mesh_entities
                 .iter()
@@ -274,15 +276,61 @@ fn measure_models(
                 if !kept.is_empty() {
                     mesh_entities = kept;
                 }
+                // Her hips: of the bones named so, the one whose subtree
+                // looks most like a person.
+                let subtree = |j: Entity| {
+                    let mut sub = vec![j];
+                    descendants(j, &children, &mut sub);
+                    sub
+                };
                 hips = main
                     .joints
                     .iter()
                     .copied()
-                    .find(|j| {
+                    .filter(|j| {
                         let n = bone_name(names.get(*j).ok());
-                        n.contains("hips") || n.contains("pelvis")
+                        (n.contains("hips") || n.contains("pelvis")) && !is_beast_bone(&n)
+                    })
+                    .max_by_key(|j| {
+                        let names: Vec<String> = subtree(*j)
+                            .iter()
+                            .map(|b| bone_name(names.get(*b).ok()))
+                            .collect();
+                        humanoid_score(&names)
                     })
                     .or_else(|| main.joints.first().copied());
+
+                // A prop rigged into her own skeleton (Meshy's riding clips
+                // put the horse's bones beside her hips in one armature):
+                // cut away every triangle weighted to bones outside the
+                // subtree of her hips.
+                if let Some(h) = hips {
+                    let human: std::collections::HashSet<Entity> = subtree(h).into_iter().collect();
+                    for e in &mesh_entities {
+                        let (Ok(skin), Ok(m3)) = (skins.get(*e), meshes3d.get(*e)) else {
+                            continue;
+                        };
+                        let foreign: Vec<bool> =
+                            skin.joints.iter().map(|j| !human.contains(j)).collect();
+                        if !foreign.iter().any(|f| *f) {
+                            continue;
+                        }
+                        let Some(mesh) = meshes.get(&m3.0) else {
+                            continue;
+                        };
+                        if let Some((culled, keep, n)) = cull_foreign(mesh, &foreign) {
+                            if n > 0 {
+                                info!(
+                                    "{:?} model: cut {n} triangles weighted to bones that aren't hers",
+                                    swap.kind
+                                );
+                                let handle = meshes.add(culled);
+                                commands.entity(*e).insert(Mesh3d(handle));
+                                cut.insert(*e, keep);
+                            }
+                        }
+                    }
+                }
             }
         }
         if let Some(h) = hips {
@@ -303,7 +351,13 @@ fn measure_models(
                 .get(h)
                 .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
             {
-                local.extend(ps.iter().map(|p| m.transform_point3(Vec3::from(*p))));
+                let keep = cut.get(e);
+                local.extend(
+                    ps.iter()
+                        .enumerate()
+                        .filter(|(i, _)| keep.is_none_or(|k| k.get(*i).copied().unwrap_or(true)))
+                        .map(|(_, p)| m.transform_point3(Vec3::from(*p))),
+                );
             }
         }
         if local.is_empty() {
@@ -392,6 +446,57 @@ fn measure_models(
         }
         commands.entity(root).insert(Measured);
     }
+}
+
+/// A copy of `mesh` without the triangles whose vertices are mostly weighted
+/// to `foreign` bones, which vertices were kept, and how many triangles
+/// went. `None` if the mesh isn't skinned or indexed as expected.
+pub fn cull_foreign(mesh: &Mesh, foreign: &[bool]) -> Option<(Mesh, Vec<bool>, usize)> {
+    let joints: Vec<[u16; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)? {
+        VertexAttributeValues::Uint16x4(j) => j.clone(),
+        VertexAttributeValues::Uint8x4(j) => j
+            .iter()
+            .map(|a| [a[0] as u16, a[1] as u16, a[2] as u16, a[3] as u16])
+            .collect(),
+        _ => return None,
+    };
+    let weights: Vec<[f32; 4]> = match mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)? {
+        VertexAttributeValues::Float32x4(w) => w.clone(),
+        _ => return None,
+    };
+    let keep: Vec<bool> = joints
+        .iter()
+        .zip(&weights)
+        .map(|(j, w)| {
+            let away: f32 = (0..4)
+                .filter(|k| foreign.get(j[*k] as usize).copied().unwrap_or(false))
+                .map(|k| w[k])
+                .sum();
+            let total: f32 = w.iter().sum::<f32>().max(1e-6);
+            away / total < 0.5
+        })
+        .collect();
+    // Unindexed meshes (flat-shaded ones are) are consecutive triples.
+    let indices: Vec<u32> = match mesh.indices() {
+        Some(bevy::mesh::Indices::U16(i)) => i.iter().map(|v| *v as u32).collect(),
+        Some(bevy::mesh::Indices::U32(i)) => i.clone(),
+        None => (0..joints.len() as u32).collect(),
+    };
+    let mut kept = Vec::with_capacity(indices.len());
+    let mut gone = 0;
+    for tri in indices.chunks_exact(3) {
+        if tri
+            .iter()
+            .all(|v| keep.get(*v as usize).copied().unwrap_or(true))
+        {
+            kept.extend_from_slice(tri);
+        } else {
+            gone += 1;
+        }
+    }
+    let mut out = mesh.clone();
+    out.insert_indices(bevy::mesh::Indices::U32(kept));
+    Some((out, keep, gone))
 }
 
 /// Bottom, top and saddle of a cloud of points in a creature's own frame

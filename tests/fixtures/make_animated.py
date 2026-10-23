@@ -149,3 +149,42 @@ gltf = {
     "accessors": accessors,
 }
 write(gltf, blob, 'rider_horse.glb')
+
+# rider_horse_one.glb: the harder case — the horse is in her own mesh and her
+# own skin, its bones beside her hips under one armature root, as one Meshy
+# riding export can be.
+blob = b''; views.clear(); accessors.clear()
+allverts = pverts + hverts
+alljoints = joints + [(2, 0, 0, 0)] * len(hverts)
+allweights = weights + [(1.0, 0.0, 0.0, 0.0)] * len(hverts)
+allidx = idx + [i + len(pverts) for i in hidx]
+xs, ys, zs = zip(*allverts)
+a_pos = add(allverts, '<fff', len(allverts), 5126, "VEC3", 34962, ([min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)]))
+a_j = add(alljoints, '<HHHH', len(alljoints), 5123, "VEC4", 34962)
+a_w = add(allweights, '<ffff', len(allweights), 5126, "VEC4", 34962)
+a_i = add(allidx, '<H', len(allidx), 5123, "SCALAR", 34963)
+ibm3 = ibm_p + [(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1)]
+a_ibm = add(ibm3, '<' + 'f' * 16, 3, 5126, "MAT4")
+t_acc = add(times, '<f', 3, 5126, "SCALAR", None, ([0.0], [1.0]))
+r_acc = add(idle_rot, '<ffff', 3, 5126, "VEC4")
+gltf = {
+    "asset": {"version": "2.0", "generator": "make_animated.py"},
+    "scene": 0,
+    "scenes": [{"nodes": [0, 1]}],
+    "nodes": [
+        {"name": "Mesh_0", "mesh": 0, "skin": 0},
+        {"name": "Armature", "children": [2, 4]},
+        {"name": "Hips", "children": [3], "translation": [0, lift, 0]},
+        {"name": "Spine", "translation": [0, 0.9, 0]},
+        {"name": "Bone_017", "translation": [0, 0, 0]},
+    ],
+    "skins": [{"inverseBindMatrices": a_ibm, "joints": [2, 3, 4], "skeleton": 1}],
+    "meshes": [{"name": "Mesh_0", "primitives": [{"attributes": {"POSITION": a_pos, "JOINTS_0": a_j, "WEIGHTS_0": a_w}, "indices": a_i}]}],
+    "animations": [{"name": "Riding",
+                    "samplers": [{"input": t_acc, "output": r_acc, "interpolation": "LINEAR"}],
+                    "channels": [{"sampler": 0, "target": {"node": 3, "path": "rotation"}}]}],
+    "buffers": [{"byteLength": len(blob)}],
+    "bufferViews": views,
+    "accessors": accessors,
+}
+write(gltf, blob, 'rider_horse_one.glb')
