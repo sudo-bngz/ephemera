@@ -196,6 +196,10 @@ cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- ephemera  # ju
 cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- --dry-run # show prompts
 ```
 
+API keys need a paid Meshy plan. Without one, the same command prints a step-by-step
+guide to make each model by hand in Meshy's web app (the free plan works): the prompt
+to paste, the triangle count and the file name to save as.
+
 Prompts live in `assets/models/meshy-prompts.txt`. Each model is a preview task
 (geometry, remeshed to its triangle budget) then a refine task (PBR textures),
 downloaded as GLB. Models run in parallel; task ids are recorded so an interrupted

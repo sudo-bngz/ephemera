@@ -14,6 +14,9 @@
 //! Every task id is recorded in `assets/models/.meshy-tasks`, so an
 //! interrupted run resumes instead of paying for the same model twice.
 //! Models run in parallel; `--force` regenerates models that already exist.
+//!
+//! Without a key (the API needs a paid Meshy plan) it prints a step-by-step
+//! guide to make the same models by hand in the web app instead.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -59,7 +62,9 @@ fn parse_prompts(text: &str) -> Result<Vec<Spec>, String> {
             continue;
         }
         let Some(spec) = out.last_mut() else {
-            return Err(format!("line {line_no}: setting outside of a [model] section"));
+            return Err(format!(
+                "line {line_no}: setting outside of a [model] section"
+            ));
         };
         // Continuation of the previous value.
         if raw.starts_with(char::is_whitespace) && !line.contains(" = ") {
@@ -99,7 +104,10 @@ fn parse_prompts(text: &str) -> Result<Vec<Spec>, String> {
             return Err(format!("[{}] has no prompt", s.name));
         }
         if s.prompt.len() > 800 {
-            return Err(format!("[{}] prompt is over Meshy's 800 characters", s.name));
+            return Err(format!(
+                "[{}] prompt is over Meshy's 800 characters",
+                s.name
+            ));
         }
         if !(100..=300_000).contains(&s.polycount) {
             return Err(format!("[{}] polycount must be 100–300000", s.name));
@@ -366,7 +374,9 @@ fn main() {
             "--ai-model" => ai_model = args.next().expect("--ai-model needs a value"),
             "--poll-ms" => {
                 poll = Duration::from_millis(
-                    args.next().and_then(|v| v.parse().ok()).expect("--poll-ms needs a number"),
+                    args.next()
+                        .and_then(|v| v.parse().ok())
+                        .expect("--poll-ms needs a number"),
                 )
             }
             "-h" | "--help" => {
@@ -423,14 +433,12 @@ fn main() {
         println!("nothing to generate");
         return;
     }
-    println!(
-        "{} model(s) via {base} (ai_model {ai_model}): {}",
-        todo.len(),
-        todo.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
-    );
     if dry_run {
         for s in &todo {
-            println!("\n[{}] {} tris, pose {:?}\n  {}", s.name, s.polycount, s.pose, s.prompt);
+            println!(
+                "\n[{}] {} tris, pose {:?}\n  {}",
+                s.name, s.polycount, s.pose, s.prompt
+            );
             if let Some(t) = &s.texture {
                 println!("  texture: {t}");
             }
@@ -438,10 +446,23 @@ fn main() {
         return;
     }
 
-    let key = std::env::var("MESHY_API_KEY").unwrap_or_else(|_| {
-        eprintln!("set MESHY_API_KEY (https://www.meshy.ai/settings/api)");
-        std::process::exit(2);
-    });
+    let Some(key) = std::env::var("MESHY_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+    else {
+        // No key (API keys need a paid Meshy plan): guide the same work
+        // through the web app instead, which the free plan can do.
+        print!("{}", manual_guide(&todo, &out_dir));
+        return;
+    };
+    println!(
+        "{} model(s) via {base} (ai_model {ai_model}): {}",
+        todo.len(),
+        todo.iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let api = Arc::new(Api {
         base: base.trim_end_matches('/').to_string(),
         key,
@@ -455,8 +476,12 @@ fn main() {
     let handles: Vec<_> = todo
         .into_iter()
         .map(|spec| {
-            let (api, ledger, out_dir, ai_model) =
-                (api.clone(), ledger.clone(), out_dir.clone(), ai_model.clone());
+            let (api, ledger, out_dir, ai_model) = (
+                api.clone(),
+                ledger.clone(),
+                out_dir.clone(),
+                ai_model.clone(),
+            );
             thread::spawn(move || {
                 let r = generate(&api, &ledger, &spec, &out_dir, &ai_model, poll);
                 if let Err(e) = &r {
@@ -476,6 +501,40 @@ fn main() {
         std::process::exit(1);
     }
     println!("done — run the game and the new models are in.");
+}
+
+/// Step-by-step instructions to make the models in Meshy's web app.
+fn manual_guide(todo: &[Spec], out_dir: &Path) -> String {
+    let mut g = String::from(
+        "\nNo MESHY_API_KEY: Meshy API keys need a paid plan.\n\
+         You can make the same models by hand in the web app (the free plan works):\n\
+         https://www.meshy.ai — Text to 3D. For each model below:\n\
+         \n  1. paste the prompt and generate\n\
+         \x20 2. Texture it (paste the texture prompt, if there is one)\n\
+         \x20 3. Remesh to the triangle count shown (free)\n\
+         \x20 4. Download as GLB and save it under the file name shown\n",
+    );
+    for s in todo {
+        g.push_str(&format!(
+            "\n── {} ──────────────────────────────\n   save as   {}\n   triangles {}\n",
+            s.name,
+            out_dir.join(format!("{}.glb", s.name)).display(),
+            s.polycount
+        ));
+        if let Some(p) = &s.pose {
+            g.push_str(&format!("   pose      {p}\n"));
+        }
+        g.push_str(&format!("   prompt    {}\n", s.prompt));
+        if let Some(t) = &s.texture {
+            g.push_str(&format!("   texture   {t}\n"));
+        }
+    }
+    g.push_str(
+        "\nRun the game afterwards: each GLB replaces its placeholder automatically.\n\
+         Free-plan models are CC BY 4.0: credit Meshy if you publish the game.\n\
+         With a paid plan: export MESHY_API_KEY=msy_... and run this again to do it all for you.\n",
+    );
+    g
 }
 
 #[cfg(test)]
@@ -505,10 +564,22 @@ mod tests {
     }
 
     #[test]
+    fn guide_names_every_file_and_prompt() {
+        let specs = parse_prompts("[gate]\nprompt = a gate\npolycount = 800\n").unwrap();
+        let g = manual_guide(&specs, Path::new("assets/models"));
+        assert!(g.contains("assets/models/gate.glb"));
+        assert!(g.contains("a gate"));
+        assert!(g.contains("800"));
+    }
+
+    #[test]
     fn shipped_prompts_are_valid() {
         let text = include_str!("../../../assets/models/meshy-prompts.txt");
         let specs = parse_prompts(text).unwrap();
         let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["ephemera", "judith", "reed_tall", "reed", "gate", "mesa"]);
+        assert_eq!(
+            names,
+            ["ephemera", "judith", "reed_tall", "reed", "gate", "mesa"]
+        );
     }
 }
