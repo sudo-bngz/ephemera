@@ -269,5 +269,13 @@ mod smoke {
         press(&mut app, KeyCode::Escape);
         tick(&mut app, 2);
         assert_eq!(phase(&app), GamePhase::Title);
+
+        // Leaving the race must not leave any race entity behind.
+        let leftovers = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::racing::Racer>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(leftovers, 0);
     }
 }

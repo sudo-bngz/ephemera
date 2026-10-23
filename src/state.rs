@@ -135,7 +135,13 @@ fn skip_from_cli(mut next: ResMut<NextState<GamePhase>>, mut stats: ResMut<Ephem
     }
 }
 
-fn despawn_phase_scoped(mut commands: Commands, q: Query<Entity, With<PhaseScoped>>) {
+/// Only roots are despawned: `despawn` is recursive, so a `PhaseScoped`
+/// child (Judith in the saddle) is already gone by the time its own command
+/// would run — despawning it again is what logged "entity does not exist".
+fn despawn_phase_scoped(
+    mut commands: Commands,
+    q: Query<Entity, (With<PhaseScoped>, Without<ChildOf>)>,
+) {
     for e in &q {
         commands.entity(e).despawn();
     }
