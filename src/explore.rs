@@ -27,10 +27,19 @@ const FOOT_KEYS: &str = "WASD walk · mouse / arrows look · SHIFT run · SPACE 
 #[derive(Resource, Default)]
 pub struct ExploreSeed(pub Option<u64>);
 
+/// The editions read in the current reality: what opens its veils.
+#[derive(Resource, Default, Debug)]
+pub struct Readings(pub HashSet<EditionId>);
+
+impl Readings {
+    pub fn count(&self) -> usize {
+        self.0.len()
+    }
+}
+
 #[derive(Resource)]
 struct Explore {
     seed: u64,
-    seen: HashSet<EditionId>,
     travelled: f32,
     last: Option<Vec3>,
     /// The land under the player: its edition.
@@ -88,9 +97,10 @@ fn setup(
     let mut rng = StdRng::seed_from_u64(seed);
     spawn_speed_lines(&mut commands, &mut meshes, &mut materials, &mut rng);
     commands.insert_resource(Race::free_flight(seed));
+    commands.insert_resource(crate::reality::Realities::origin(seed));
+    commands.insert_resource(Readings::default());
     commands.insert_resource(Explore {
         seed,
-        seen: HashSet::new(),
         travelled: 0.0,
         last: None,
         region: None,
@@ -114,6 +124,8 @@ fn setup(
 fn teardown(mut commands: Commands) {
     commands.remove_resource::<Explore>();
     commands.remove_resource::<Race>();
+    commands.remove_resource::<crate::reality::Realities>();
+    commands.remove_resource::<Readings>();
 }
 
 fn new_world(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<GamePhase>>) {
@@ -136,7 +148,10 @@ fn hud(
     wg: Res<crate::world::WorldGen>,
     player: Query<(&Transform, &Velocity, &Rider, Has<Parked>), With<Player>>,
     walker: Query<(&Transform, &Velocity, &Walker), With<Judith>>,
-    landmarks: Query<(&GlobalTransform, &Landmark)>,
+    landmarks: Query<(&GlobalTransform, &Landmark, Option<&crate::reality::Portal>)>,
+    realities: Res<crate::reality::Realities>,
+    mut readings: ResMut<Readings>,
+    shift: Option<Res<crate::reality::Shift>>,
     mut hud: ResMut<Hud>,
 ) {
     let Ok((etf, evel, rider, parked)) = player.single() else {
@@ -170,12 +185,12 @@ fn hud(
     // The nearest landmark within sight: its edition, alea-style.
     let near = landmarks
         .iter()
-        .map(|(t, l)| (t.translation().distance(p), l.0))
-        .filter(|(d, _)| *d < 90.0)
+        .map(|(t, l, portal)| (t.translation().distance(p), l.0, portal.map(|p| p.open)))
+        .filter(|(d, _, _)| *d < 90.0)
         .min_by(|a, b| a.0.total_cmp(&b.0));
-    if let Some((d, id)) = near {
+    if let Some((d, id, _)) = near {
         if d < 45.0 {
-            ex.seen.insert(id);
+            readings.0.insert(id);
         }
     }
 
@@ -223,12 +238,23 @@ fn hud(
             "█".repeat((rider.boost_fraction() * 10.0).round() as usize),
         ),
     };
+    let veils = if readings.count() >= crate::reality::READINGS_TO_OPEN {
+        "the veils are open".to_string()
+    } else {
+        format!(
+            "read {}/{} editions to open the veils",
+            readings.count(),
+            crate::reality::READINGS_TO_OPEN
+        )
+    };
     hud.side = format!(
-        "{status}\n\n{}\n{:.1} km travelled\n{} land(s), {} landmark edition(s) found{}",
+        "{status}\n\nREALITY 0x{:x} · depth {}\n{veils}\n\n{}\n{:.1} km travelled\n{} land(s), {} edition(s) read here{}",
+        realities.current(),
+        realities.depth(),
         land,
         ex.travelled / 1000.0,
         ex.lands_seen.len(),
-        ex.seen.len(),
+        readings.count(),
         painting,
     );
     hud.footer = if on_foot.is_some() {
@@ -236,10 +262,16 @@ fn hud(
     } else {
         FLIGHT_KEYS.into()
     };
-    hud.banner = if ex.region_banner > 0.0 {
+    hud.banner = if shift.is_some() {
+        hud.banner.clone()
+    } else if ex.region_banner > 0.0 {
         format!("— {land} —")
-    } else if let Some((_, id)) = near {
-        id.label()
+    } else if let Some((_, id, portal)) = near {
+        match portal {
+            Some(true) => format!("{} — a way out", id.label()),
+            Some(false) => format!("{} — sealed", id.label()),
+            None => id.label(),
+        }
     } else {
         String::new()
     };

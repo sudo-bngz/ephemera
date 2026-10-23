@@ -154,6 +154,12 @@ pub struct EditionId {
     pub seed: u64,
 }
 
+/// A colour for an edition, from its seed: what a veil's crossing glows.
+pub fn edition_colour(id: EditionId) -> Color {
+    let hue = (id.seed % 360) as f32;
+    Color::hsl(hue, 0.7, 0.62)
+}
+
 impl EditionId {
     pub fn label(&self) -> String {
         format!("{} — edition 0x{:x}", self.work.label(), self.seed)

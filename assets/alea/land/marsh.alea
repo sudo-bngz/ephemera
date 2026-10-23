@@ -7,11 +7,14 @@
 //   2nd render image  = the ground painting (optional; else the relief's).
 //   render sound      = the region's ambience, looped.
 
-work Marsh {
-  let low   = clouds(scale: 5) * 0.5 + warp(clouds(scale: 2), amount: 0.1) * 0.5
+// `depth` is how many veils below the origin reality this edition lies
+// (reality.rs): the deeper, the more the marsh bends and the pools spread.
+work Marsh(depth = 0) {
+  let bend  = 0.1 + 0.03 * depth
+  let low   = clouds(scale: 5) * 0.5 + warp(clouds(scale: 2), amount: bend) * 0.5
   // Pools wherever a second noise peaks: one evaluation, any number of pools.
   // (A merge of many blobs looks the same and costs a blob per point.)
-  let pools = smoothstep(0.58, 0.68, clouds(scale: ~between(6, 9), detail: 3))
+  let pools = smoothstep(0.58 - 0.02 * depth, 0.68, clouds(scale: ~between(6, 9), detail: 3))
   let channels = smoothstep(0.42, 0.5, abs(noise(x * 3, y * 3, 0)))   // meanders
 
   field relief = 0.33 + 0.13 * low - 0.22 * pools - 0.06 * (1 - channels)

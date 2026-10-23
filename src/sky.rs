@@ -39,6 +39,23 @@ pub struct SkyPalette {
 }
 
 impl SkyPalette {
+    /// The same light, `depth` realities down: the hues turn, the fog
+    /// thickens, the sun goes strange.
+    pub fn drift(mut self, depth: u32) -> Self {
+        use bevy::color::Hue;
+        if depth == 0 {
+            return self;
+        }
+        let turn = 28.0 * depth as f32;
+        self.zenith = self.zenith.rotate_hue(turn);
+        self.horizon = self.horizon.rotate_hue(turn * 0.7);
+        self.sun = self.sun.rotate_hue(turn * 0.4);
+        self.ambient = self.ambient.rotate_hue(turn * 0.7);
+        self.cloud = self.cloud.rotate_hue(turn * 0.5);
+        self.visibility *= 0.9f32.powi(depth as i32).max(0.45);
+        self
+    }
+
     pub fn for_mood(mood: Mood) -> Self {
         match mood {
             Mood::Dusk => Self {
@@ -289,7 +306,7 @@ pub fn spawn_sky(
 
 /// Distant mesas, kept centred on the camera horizontally.
 #[derive(Component)]
-struct MesaRing;
+pub struct MesaRing;
 
 fn follow_camera_xz(
     cam: Query<&Transform, (With<Camera3d>, Without<MesaRing>)>,

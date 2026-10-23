@@ -49,6 +49,11 @@ The game reads a land work as:
 The region's canvas (0–1) spans 1024 m around its centre; neighbours overlap and blend.
 The game then cuts its own rivers through the relief and flattens the ground under
 the tribe's towns; a land work need not know about either.
+
+A land work may declare a `depth` parameter — `work Marsh(depth = 0) { … }` — and
+the game gives it the reality's depth (how many veils below the origin it lies,
+see `reality.rs`): deeper editions can bend, swell, discolour. `marsh.alea` and
+`grove.alea` do; the others ignore depth and only the sky drifts over them.
 Keep the relief and painting fields cheap: they are sampled ~20 000 times per chunk.
 Noise, `clouds`, `stripes`, `warp`, `posterize`, `smoothstep` cost about a microsecond
 a point; a `merge` of twenty shapes costs twenty. (`cargo test chunk_cost -- --ignored

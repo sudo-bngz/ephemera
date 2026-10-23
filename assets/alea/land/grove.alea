@@ -1,11 +1,13 @@
 // Grove — rolling wooded hills: bulb trees, long grass, grazing herds.
 
-work Grove {
-  let hills  = warp(clouds(scale: 2.5), amount: 0.05) * 0.8 + clouds(scale: 7) * 0.2
+// `depth` (reality.rs): deeper editions grow taller hills and stranger
+// litter under the trees.
+work Grove(depth = 0) {
+  let hills  = warp(clouds(scale: 2.5), amount: 0.05 + 0.02 * depth) * 0.8 + clouds(scale: 7) * 0.2
   // A few clearings sunk into meadows; one of them usually floods.
   let glades = smoothstep(0.62, 0.72, clouds(scale: ~between(4, 6), detail: 3))
 
-  field relief = 0.36 + 0.26 * hills - 0.1 * glades
+  field relief = 0.36 + (0.26 + 0.05 * depth) * hills - 0.1 * glades
   render image(relief, range: [0, 1],
                palette: ["#000000", "#1e2418", "#3a4a2a", "#7a9a4a", "#e8f0c0"])
 

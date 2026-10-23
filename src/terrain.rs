@@ -283,6 +283,9 @@ impl Climate {
 /// thread that samples the terrain.
 pub struct Land {
     pub seed: u64,
+    /// How far from the origin reality this world is (`reality.rs`): the
+    /// land works get it as their `depth` parameter and drift with it.
+    pub depth: u32,
     pub works: Vec<LandWork>,
     climate: Climate,
     regions: Mutex<HashMap<IVec2, Arc<Region>>>,
@@ -292,11 +295,11 @@ pub struct Land {
 }
 
 impl Land {
-    pub fn load(seed: u64) -> Self {
-        Self::load_from(seed, &land_dir())
+    pub fn load(seed: u64, depth: u32) -> Self {
+        Self::load_from(seed, depth, &land_dir())
     }
 
-    pub fn load_from(seed: u64, dir: &Path) -> Self {
+    pub fn load_from(seed: u64, depth: u32, dir: &Path) -> Self {
         let mut works = Vec::new();
         let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
             .map(|d| {
@@ -368,6 +371,7 @@ impl Land {
         }
         Self {
             seed,
+            depth,
             works,
             climate: Climate { perm },
             regions: Mutex::new(HashMap::new()),
@@ -475,7 +479,13 @@ impl Land {
     > {
         let m = &work.module;
         let show = |e: alea::error::Error| e.display(&m.src, &m.file);
-        let edition = eval::resolve(m, seed).map_err(show)?;
+        // The reality's depth, for works that declare `(depth = 0)`.
+        let mut given = HashMap::new();
+        given.insert(
+            "depth".to_string(),
+            eval::Val::Field(eval::Field::Const(self.depth as f64)),
+        );
+        let edition = eval::resolve_with(m, seed, &given).map_err(show)?;
         media::validate(&edition).map_err(show)?;
         let images: Vec<&eval::Render> = edition
             .renders
@@ -763,25 +773,39 @@ impl Sampler {
 }
 
 /// The world's shape for one seed: the land plus the discs kept flat.
+/// While a reality shifts into another, `blend` holds the land it is
+/// becoming and how far along (0–1); heights are mixed between the two.
 #[derive(Clone)]
 pub struct Terrain {
     pub land: Arc<Land>,
     pub flatten: Vec<Flatten>,
+    pub blend: Option<(Arc<Land>, f32)>,
 }
 
 impl Terrain {
-    pub fn new(seed: u64) -> Self {
+    pub fn at_depth(seed: u64, depth: u32) -> Self {
         Self {
-            land: Arc::new(Land::load(seed)),
+            land: Arc::new(Land::load(seed, depth)),
             flatten: Vec::new(),
+            blend: None,
         }
     }
 
     #[cfg(test)]
     pub fn from_dir(seed: u64, dir: &Path) -> Self {
         Self {
-            land: Arc::new(Land::load_from(seed, dir)),
+            land: Arc::new(Land::load_from(seed, 0, dir)),
             flatten: Vec::new(),
+            blend: None,
+        }
+    }
+
+    /// The same shape on another land (the reality this one becomes).
+    pub fn with_land(&self, land: Arc<Land>) -> Self {
+        Self {
+            land,
+            flatten: self.flatten.clone(),
+            blend: None,
         }
     }
 
@@ -804,9 +828,18 @@ impl Terrain {
         self.land.climate.river(Vec2::new(x, z))
     }
 
-    /// Terrain height at a point.
+    /// Terrain height at a point (mixed with the land it is becoming,
+    /// while a shift is under way).
     pub fn height(&self, x: f32, z: f32) -> f32 {
-        self.sampler(Vec2::new(x, z), 0.0).height(x, z)
+        let h = self.sampler(Vec2::new(x, z), 0.0).height(x, z);
+        match &self.blend {
+            Some((land, t)) if *t > 0.0 => {
+                let other = self.with_land(land.clone());
+                let o = other.sampler(Vec2::new(x, z), 0.0).height(x, z);
+                lerp(h, o, t.clamp(0.0, 1.0))
+            }
+            _ => h,
+        }
     }
 
     /// What a flier or walker rests on: the ground, or the water surface.

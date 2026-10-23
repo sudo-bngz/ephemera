@@ -29,6 +29,7 @@ mod input;
 mod models;
 mod onfoot;
 mod racing;
+mod reality;
 mod rig;
 mod settlement;
 mod sky;
@@ -95,6 +96,7 @@ impl Plugin for GamePlugin {
             racing::RacingPlugin,
             explore::ExplorePlugin,
             onfoot::OnFootPlugin,
+            reality::RealityPlugin,
         ));
     }
 }
@@ -867,6 +869,152 @@ mod smoke {
             .filter(|(l, t)| t.rotation.angle_between(l.rest.rotation) > 0.05)
             .count();
         assert!(swung > 0, "no limb moved");
+    }
+
+    /// The maze: an open veil is a portal. Crossing one shifts the world
+    /// into the reality below (depth 1), morphing the ground; crossing an
+    /// upward veil there brings the origin back.
+    #[test]
+    fn veils_lead_between_realities() {
+        use crate::art::{EditionId, Work};
+        use crate::explore::Readings;
+        use crate::reality::{Gate, Portal, Realities, Shift};
+        let mut app = app();
+        explore(&mut app, 21);
+        settle(&mut app, 30_000);
+        tick(&mut app, 3);
+        let origin = app.world().resource::<Realities>().current();
+        assert_eq!(app.world().resource::<Realities>().depth(), 0);
+
+        let find = |app: &mut App, up: bool| -> Option<(Entity, Vec3)> {
+            app.world_mut()
+                .query::<(Entity, &GlobalTransform, &Portal)>()
+                .iter(app.world())
+                .find(|(_, _, p)| matches!(p.gate, Gate::Up) == up)
+                .map(|(e, t, _)| (e, t.translation()))
+        };
+        let (_, veil) = find(&mut app, false).expect("a veil leading down");
+        assert!(
+            find(&mut app, true).is_none(),
+            "no veil leads up from the origin"
+        );
+        // Sealed until the reality is read.
+        let open = |app: &mut App| {
+            app.world_mut()
+                .query::<&Portal>()
+                .iter(app.world())
+                .any(|p| p.open)
+        };
+        app.world_mut().resource_mut::<Readings>().0.clear();
+        tick(&mut app, 2);
+        assert!(!open(&mut app), "veils open before the reality is read");
+        for k in 0..crate::reality::READINGS_TO_OPEN as u64 {
+            app.world_mut()
+                .resource_mut::<Readings>()
+                .0
+                .insert(EditionId {
+                    work: Work::Orb,
+                    seed: 1000 + k,
+                });
+        }
+        tick(&mut app, 2);
+        assert!(open(&mut app), "reading the reality didn't open the veils");
+
+        // Fly into it.
+        let player = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::racing::Player>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .unwrap()
+            .translation = veil;
+        tick(&mut app, 2);
+        assert!(
+            app.world().contains_resource::<Shift>(),
+            "crossing didn't start a shift"
+        );
+        assert!(app.world().resource::<crate::world::WorldGen>().paused);
+        // The next reality builds on the compute pool; then the morph runs.
+        let start = std::time::Instant::now();
+        let mut blended = false;
+        while app.world().contains_resource::<Shift>() {
+            app.update();
+            if app
+                .world()
+                .resource::<crate::world::WorldTerrain>()
+                .0
+                .blend
+                .is_some()
+            {
+                blended = true;
+            }
+            if start.elapsed().as_secs() > 60 {
+                panic!("the shift never finished");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(blended, "the ground never morphed");
+        let r = app.world().resource::<Realities>();
+        assert_eq!(r.depth(), 1);
+        let below = r.current();
+        assert_ne!(below, origin);
+        assert_eq!(
+            app.world()
+                .resource::<crate::world::WorldTerrain>()
+                .0
+                .land
+                .seed,
+            below
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::world::WorldTerrain>()
+                .0
+                .land
+                .depth,
+            1
+        );
+        assert!(!app.world().resource::<crate::world::WorldGen>().paused);
+        assert_eq!(
+            app.world().resource::<Readings>().count(),
+            0,
+            "readings reset"
+        );
+        // The new reality streams in: props grow, chunks come back.
+        settle(&mut app, 30_000);
+        tick(&mut app, 3);
+        assert!(chunks_loaded(&app).len() > 30);
+
+        // Somewhere here a veil leads up; it is sealed until read, then
+        // takes us home.
+        if let Some((_, up)) = find(&mut app, true) {
+            for k in 0..crate::reality::READINGS_TO_OPEN as u64 {
+                app.world_mut()
+                    .resource_mut::<Readings>()
+                    .0
+                    .insert(EditionId {
+                        work: Work::Orb,
+                        seed: 2000 + k,
+                    });
+            }
+            tick(&mut app, 2);
+            app.world_mut()
+                .get_mut::<Transform>(player)
+                .unwrap()
+                .translation = up;
+            tick(&mut app, 2);
+            let start = std::time::Instant::now();
+            while app.world().contains_resource::<Shift>() {
+                app.update();
+                assert!(start.elapsed().as_secs() < 60, "the way up never finished");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let r = app.world().resource::<Realities>();
+            assert_eq!(r.depth(), 0);
+            assert_eq!(r.current(), origin);
+        }
     }
 
     /// N draws a new world in place.

@@ -40,6 +40,19 @@ shoulders, with people walking between the houses and torches burning. Herds of
 come close, flocks of **kites** ride the air over the high lands, and **leapers**
 break the surface of the lakes.
 
+**The maze of realities.** Every world is an edition of the same work, and the
+veils — the aurora curtains — are the ways between editions. A reality is a seed
+and a *depth*; its veils are sealed until the reality has been *read* (three of
+its editions found), then flying through one shifts the world: the next reality
+is drawn in the background for the ground you stand on, and over four seconds
+the relief morphs from one into the other, the old world's props dissolve, the
+fog closes in in the veil's colour, the sky turns, and the new world grows in
+around you. One veil in three leads back up towards the reality you came from;
+the rest lead deeper, and depth leaks into everything — the land works get it
+as a parameter (`work Marsh(depth = 0)`) and drift, the sky's hues turn, the fog
+thickens. The HUD shows the reality, its depth and whether its veils are open.
+(This is the mechanism; the story that drives it is still being written.)
+
 **On foot.** Press `F` in flight and the Ephemera comes down; Judith slides off its
 back and the camera settles over her shoulder. She walks, runs, jumps, wades and swims
 through the world at her own height — under the mushrooms, along the walkways, into
@@ -128,6 +141,7 @@ src/
 ├── taming.rs      Phase II — dawn loop, four actions, escape condition
 ├── racing.rs      Phase III — flight model, track spline, gates, AI, speed lines, results
 ├── explore.rs     Free flight through an endless world
+├── reality.rs     The maze of realities: portals in the veils, the shift that morphs one world into the next
 └── onfoot.rs      Landing, dismounting, the third-person walker, whistling, remounting
 
 assets/alea/       the alea works: land/ (biomes), sound/ (music, wings, chimes), landmarks

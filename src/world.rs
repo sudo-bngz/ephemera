@@ -52,6 +52,8 @@ pub enum Mood {
 #[derive(Clone, Debug)]
 pub struct WorldSetup {
     pub seed: u64,
+    /// Distance from the origin reality (`reality.rs`); 0 for the home world.
+    pub depth: u32,
     pub mood: Mood,
     /// Discs forced flat (camp, nest).
     pub flatten: Vec<Flatten>,
@@ -64,6 +66,7 @@ impl WorldSetup {
     pub fn new(seed: u64, mood: Mood) -> Self {
         Self {
             seed,
+            depth: 0,
             mood,
             flatten: Vec::new(),
             keep_clear: Vec::new(),
@@ -84,9 +87,27 @@ pub struct WorldGen {
     pending: HashMap<IVec2, Task<ChunkData>>,
     clear_cells: HashMap<IVec2, Vec<Vec2>>,
     clear_radius: f32,
+    /// Streaming pauses while a reality shifts into another.
+    pub paused: bool,
+    /// Props of chunks spawned before this time grow in from nothing (the
+    /// world resolving after a shift).
+    pub grow_until: f32,
 }
 
 impl WorldGen {
+    /// The chunks in the world, with their roots.
+    pub fn chunks(&self) -> Vec<(IVec2, Entity)> {
+        self.loaded.iter().map(|(c, e)| (*c, *e)).collect()
+    }
+
+    /// Forgets every chunk (the caller despawns them) and takes a new seed:
+    /// the next frames stream the new reality in.
+    pub fn restart(&mut self, seed: u64) {
+        self.seed = seed;
+        self.loaded.clear();
+        self.pending.clear();
+    }
+
     /// Chunk builds in flight.
     pub fn pending(&self) -> usize {
         self.pending.len()
@@ -116,6 +137,26 @@ impl WorldGen {
 /// A chunk root, with its grid coordinates.
 #[derive(Component)]
 pub struct Chunk(#[cfg_attr(not(test), allow(dead_code))] pub IVec2);
+
+/// A chunk's ground as built: its heights (to morph from, when the reality
+/// shifts), its mesh and its material.
+#[derive(Component)]
+pub struct ChunkGround {
+    pub heights: Vec<f32>,
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<StandardMaterial>,
+}
+
+/// A prop of a chunk (anything but its ground and water): what dissolves
+/// when the reality shifts, and grows back in the next one.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Prop {
+    pub base_scale: Vec3,
+}
+
+/// Growing in from nothing: `t` runs 0–1.
+#[derive(Component)]
+pub struct Grow(pub f32);
 
 /// A reed clump. Gives cover on foot. In flight, short clumps are soft
 /// (you plough through them and they bend), tall ones are `solid` obstacles
@@ -446,7 +487,7 @@ pub fn spawn_world(
     setup: WorldSetup,
 ) -> (Entity, Terrain) {
     let palette = crate::sky::SkyPalette::for_mood(setup.mood);
-    let mut terrain = Terrain::new(setup.seed);
+    let mut terrain = Terrain::at_depth(setup.seed, setup.depth);
     terrain.flatten = setup.flatten.clone();
     // Pay for the regions around the start now, not during the first frames.
     let _ = terrain.sampler(Vec2::ZERO, CHUNK * (VIEW_RADIUS as f32 + 1.0));
@@ -465,6 +506,8 @@ pub fn spawn_world(
         pending: HashMap::new(),
         clear_cells,
         clear_radius: setup.keep_clear_radius.min(32.0),
+        paused: false,
+        grow_until: 0.0,
     });
     commands.insert_resource(WorldTerrain(terrain.clone()));
     art.reset(setup.seed);
@@ -539,6 +582,27 @@ impl ChunkData {
         a + (b - a) * tz
     }
 
+    /// Ground mesh positions and normals from a height grid (`(GRID+3)²`,
+    /// border included), as `mesh()` builds them.
+    pub(crate) fn ground_vertices(hs: &[f32]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let n = GRID + 1;
+        let m = GRID + 3;
+        let step = CHUNK / GRID as f32;
+        let at = |i: usize, j: usize| hs[(j + 1) * m + (i + 1)];
+        let mut positions = Vec::with_capacity(n * n);
+        let mut normals = Vec::with_capacity(n * n);
+        for j in 0..n {
+            for i in 0..n {
+                let (lx, lz) = (i as f32 * step, j as f32 * step);
+                let dx = hs[(j + 1) * m + (i + 2)] - hs[(j + 1) * m + i];
+                let dz = hs[(j + 2) * m + (i + 1)] - hs[j * m + (i + 1)];
+                positions.push([lx, at(i, j), lz]);
+                normals.push(Vec3::new(-dx, 2.0 * step, -dz).normalize().to_array());
+            }
+        }
+        (positions, normals)
+    }
+
     fn mesh(&self) -> Mesh {
         let n = GRID + 1;
         let m = GRID + 3;
@@ -578,7 +642,11 @@ impl ChunkData {
         .with_inserted_indices(bevy::mesh::Indices::U32(indices))
     }
 
-    fn image(&self) -> Image {
+    pub(crate) fn heights(&self) -> &[f32] {
+        &self.heights
+    }
+
+    pub(crate) fn image(&self) -> Image {
         let mut img = Image::new(
             Extent3d {
                 width: TEXELS as u32,
@@ -651,7 +719,7 @@ fn spawn_chunk(
 ) -> Entity {
     let coord = data.coord;
     let origin = coord.as_vec2() * CHUNK;
-    let mesh = data.mesh();
+    let mesh = meshes.add(data.mesh());
     let min_h = data.min_h;
     let ground_mat = materials.add(StandardMaterial {
         base_color: Color::WHITE,
@@ -659,6 +727,11 @@ fn spawn_chunk(
         perceptual_roughness: 0.95,
         ..default()
     });
+    let ground = ChunkGround {
+        heights: data.heights.clone(),
+        mesh: mesh.clone(),
+        material: ground_mat.clone(),
+    };
     let mut rng = StdRng::seed_from_u64(hash(&[wg.seed as i64, coord.x as i64, coord.y as i64]));
     let centre_biome = t.props_at(origin.x + CHUNK * 0.5, origin.y + CHUNK * 0.5);
 
@@ -673,11 +746,11 @@ fn spawn_chunk(
         .id();
 
     let mut kids: Vec<Entity> = Vec::new();
-    kids.push(
-        commands
-            .spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(ground_mat)))
-            .id(),
-    );
+    let ground_e = commands
+        .spawn((Mesh3d(mesh), MeshMaterial3d(ground_mat)))
+        .id();
+    commands.entity(root).insert(ground);
+    // Everything spawned after the ground and the water is a prop.
     if min_h < SEA_LEVEL {
         kids.push(
             commands
@@ -690,6 +763,7 @@ fn spawn_chunk(
                 .id(),
         );
     }
+    let first_prop = kids.len();
 
     // A random spot in the chunk: local position, world xz, ground height.
     let spot = |rng: &mut StdRng| {
@@ -1137,8 +1211,50 @@ fn spawn_chunk(
         }
     }
 
+    let growing = wg.grow_until > 0.0;
+    for k in &kids[first_prop..] {
+        // The prop's own scale is its size (`record_props` reads it once
+        // it exists); growing in starts from nothing.
+        commands.entity(*k).insert(Prop {
+            base_scale: Vec3::NAN,
+        });
+        if growing {
+            commands.entity(*k).insert(Grow(0.0));
+        }
+    }
+    kids.insert(0, ground_e);
     commands.entity(root).add_children(&kids);
     root
+}
+
+/// A new prop's scale is its size: remember it before anything scales it.
+fn record_props(mut q: Query<(&mut Prop, &Transform), Added<Prop>>) {
+    for (mut p, tf) in &mut q {
+        if p.base_scale.is_nan() {
+            p.base_scale = tf.scale;
+        }
+    }
+}
+
+/// Props grow in from nothing, then are plain props again.
+fn grow_props(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Grow, &mut Transform, &Prop)>,
+) {
+    let dt = time.delta_secs();
+    for (e, mut g, mut tf, p) in &mut q {
+        if p.base_scale.is_nan() {
+            continue;
+        }
+        g.0 = (g.0 + dt / 1.4).min(1.0);
+        let s = 1.0 - (1.0 - g.0).powi(3);
+        tf.scale = p.base_scale * s.max(0.001);
+        if g.0 >= 1.0 {
+            tf.scale = p.base_scale;
+            commands.entity(e).remove::<Grow>();
+        }
+    }
 }
 
 /// A bulb tree: a tapering trunk and a cluster of round canopies, leaning
@@ -1455,7 +1571,8 @@ pub(crate) fn veil(
     slot: u64,
 ) -> Entity {
     let (mat, id) = art.edition(Work::Veil, slot, materials);
-    let y = ground.y + rng.gen_range(70.0..120.0);
+    // Low enough to fly through: the bottom edge hangs 8–25 m up.
+    let y = ground.y + rng.gen_range(38.0..52.0);
     commands
         .spawn((
             Landmark(id),
@@ -1530,6 +1647,9 @@ fn stream_chunks(
     let (Some(mut wg), Some(terrain)) = (wg, terrain) else {
         return;
     };
+    if wg.paused {
+        return;
+    }
     let Some(p) = focus
         .iter()
         .next()
@@ -1787,6 +1907,8 @@ impl Plugin for WorldPlugin {
         app.add_systems(
             Update,
             (
+                record_props,
+                grow_props.after(record_props),
                 drift_spores,
                 sway_reeds,
                 sway_trees,
