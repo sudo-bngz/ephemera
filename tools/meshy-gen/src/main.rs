@@ -834,9 +834,20 @@ mod tests {
         let text = include_str!("../../../assets/models/meshy-prompts.txt");
         let specs = parse_prompts(text).unwrap();
         let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["ephemera", "judith", "reed_tall", "reed", "gate", "mesa"]
-        );
+        assert!(names.starts_with(&["ephemera", "judith"]));
+        // The game's slots (models.rs); a `_N` suffix is a variant.
+        let slots = [
+            "ephemera", "judith", "villager", "reed_tall", "reed", "gate", "mesa", "tree",
+            "mushroom", "boulder", "spire", "crystal", "rib", "hut", "house", "tower", "torch",
+            "canoe", "wader", "grazer", "goat", "kite", "leaper",
+        ];
+        for n in &names {
+            let slot = match n.rsplit_once('_') {
+                Some((s, d)) if !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()) => s,
+                _ => n,
+            };
+            assert!(slots.contains(&slot), "[{n}] is not a slot the game knows");
+        }
+        assert!(names.len() > 20);
     }
 }

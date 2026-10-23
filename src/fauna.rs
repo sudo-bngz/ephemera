@@ -20,6 +20,7 @@ use rand::Rng;
 use rand::rngs::StdRng;
 
 use crate::components::CameraTarget;
+use crate::models::{ModelKind, Swappable};
 use crate::terrain::{Props, SEA_LEVEL, Terrain};
 use crate::world::{CHUNK, ChunkData, WorldTerrain};
 
@@ -180,6 +181,7 @@ fn spawn_wader(commands: &mut Commands, fa: &FaunaAssets, at: Vec3, rng: &mut St
     commands
         .spawn((
             critter(Beast::Wader, at, 18.0, 1.4, rng),
+            Swappable::sized(ModelKind::Wader, Vec3::new(1.6, 3.7, 2.2)).variant(rng.r#gen()),
             Name::new("Wader"),
             Transform::from_translation(at)
                 .with_rotation(Quat::from_rotation_y(yaw))
@@ -269,6 +271,15 @@ fn spawn_grazer(
     commands
         .spawn((
             critter(Beast::Grazer, herd, 16.0, 0.9, rng),
+            Swappable::sized(
+                if mountain {
+                    ModelKind::Goat
+                } else {
+                    ModelKind::Grazer
+                },
+                Vec3::new(1.8, 2.1, 3.5),
+            )
+            .variant(rng.r#gen()),
             Name::new(if mountain { "Goat" } else { "Grazer" }),
             Transform::from_translation(at)
                 .with_rotation(Quat::from_rotation_y(yaw))
@@ -357,6 +368,7 @@ fn spawn_kite(
     commands
         .spawn((
             c,
+            Swappable::sized(ModelKind::Kite, Vec3::new(6.0, 0.6, 4.6)).variant(rng.r#gen()),
             Name::new("Kite"),
             Transform::from_translation(centre).with_scale(Vec3::splat(size)),
             Visibility::default(),
@@ -400,6 +412,7 @@ fn spawn_leaper(commands: &mut Commands, fa: &FaunaAssets, at: Vec3, rng: &mut S
     commands
         .spawn((
             critter(Beast::Leaper, at, 12.0, 6.0, rng),
+            Swappable::sized(ModelKind::Leaper, Vec3::new(0.7, 0.7, 2.3)).variant(rng.r#gen()),
             Name::new("Leaper"),
             Transform::from_translation(at.with_y(SEA_LEVEL - 2.0)).with_scale(Vec3::splat(size)),
             Visibility::default(),

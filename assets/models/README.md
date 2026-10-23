@@ -4,23 +4,56 @@ Drop a `.glb` file here with one of the names below and the game uses it on
 the next run. No code change, no rebuild. A missing file keeps the built-in
 placeholder, so you can swap models one at a time.
 
-| File            | Replaces                                  | Placeholder size        |
-|-----------------|-------------------------------------------|-------------------------|
-| `ephemera.glb`  | the creature (player + 3 rivals)          | ~7 m long, faces -Z     |
-| `judith.glb`    | Judith on foot and in the saddle          | ~1.9 m tall             |
-| `reed_tall.glb` | tall, *solid* reed clumps (obstacles)     | unit: 1 m radius × 1 m  |
-| `reed.glb`      | short reed clumps (soft, fly-through)     | unit: 1 m radius × 1 m  |
-| `gate.glb`      | race gates                                | unit: 1 m tall          |
-| `mesa.glb`      | distant rock formations on the horizon    | unit: 1 m               |
+Every kind of thing in the world has a **slot**. The first seven are fitted
+by hand (below); everything else is **auto-fitted**: the model's bounding
+box is scaled to the size the world spawns it at and its bottom put on the
+ground, so any export fits.
+
+| Slot (file)     | Replaces                                  | Fitted to                     |
+|-----------------|-------------------------------------------|-------------------------------|
+| `ephemera.glb`  | the creature (player + 3 rivals)          | hand: ~7 m long, faces -Z     |
+| `judith.glb`    | Judith on foot and in the saddle          | hand: ~1.9 m tall             |
+| `villager.glb`  | the tribe: villagers, the rivals' riders  | hand: ~1.9 m tall             |
+| `reed_tall.glb` | tall, *solid* reed clumps (obstacles)     | unit: 1 m radius × 1 m        |
+| `reed.glb`      | short reed clumps (soft, fly-through)     | unit: 1 m radius × 1 m        |
+| `gate.glb`      | race gates                                | unit: 1 m tall                |
+| `mesa.glb`      | distant rock formations on the horizon    | unit: 1 m                     |
+| `tree.glb`      | bulb trees (groves, lower peaks)          | auto: 7–16 m tall             |
+| `mushroom.glb`  | the giant mushrooms of the fungal land    | auto: 9–25 m tall             |
+| `boulder.glb`   | boulders and scree                        | auto: 2–10 m                  |
+| `spire.glb`     | rock needles on the peaks                 | auto: 9–26 m tall             |
+| `crystal.glb`   | crystal shard clusters                    | auto: 5–15 m tall             |
+| `rib.glb`       | bone arches you fly through               | auto: 12–36 m span            |
+| `hut.glb`       | stilt huts over the water                 | auto: ~7 × 7 m, 5 m tall      |
+| `house.glb`     | stone houses in the towns                 | auto: 4–7 m, 5–8 m tall       |
+| `tower.glb`     | town towers and the holds' towers         | auto: 10–22 m tall            |
+| `torch.glb`     | standing torches (the flame is yours)     | auto: 2.6 m tall              |
+| `canoe.glb`     | canoes by the stilt villages              | auto: 5.2 m long              |
+| `wader.glb`     | the tall marsh birds                      | auto: 3.7 m tall, faces -Z    |
+| `grazer.glb`    | the herd animals                          | auto: 2.1 m tall, 3.5 m long  |
+| `goat.glb`      | mountain goats                            | auto: as the grazer, smaller  |
+| `kite.glb`      | the flying rays                           | auto: 6 m span                |
+| `leaper.glb`    | the lake fish                             | auto: 2.3 m long              |
+
+**Variants.** A slot holds any number of files: `tree.glb`, `tree_2.glb`,
+`tree_3.glb`… Every tree picks one at random (by its seed, so the same world
+gives the same forest), so three tree models make a forest that doesn't
+repeat. The same goes for every slot: several houses, several villagers,
+several boulders. `meshy-prompts.txt` ships with a few variants for the
+slots that gain the most from it.
 
 "Unit" models are stretched per instance: each reed clump scales the model
 to its own radius and height, each gate to the gate height. So model those
 around 1 m and let the game size them.
 
+A swapped animal keeps the game's behaviour (it still roams and flees) but
+loses the placeholder's moving legs — unless its GLB carries animation
+clips, which the game plays (`Idle`, `Walk`, `Run`, `Fly`, `Swim` by name).
+
 ## Fitting a model: `models.cfg`
 
-Generated models come in arbitrary sizes and orientations. Adjust them in
-`models.cfg`, one line per model:
+The hand-fitted models come in arbitrary sizes and orientations. Adjust them
+in `models.cfg`, one line per model (or per variant, `tree_2 …`):
 
 ```text
 ephemera   scale=6.0  yaw=180  y=-1.0
@@ -28,23 +61,29 @@ judith     scale=1.8  yaw=180
 reed_tall  scale=1.0
 ```
 
-- `scale`: uniform scale applied on top of the per-instance size.
+- `scale`: uniform scale applied on top of the per-instance size (for
+  auto-fitted slots, a nudge on the fit: `1.2` makes every tree a fifth
+  bigger than the box the world asked for).
 - `yaw`: degrees around the vertical axis. Meshy, like most tools, exports
   facing +Z, while Bevy's forward is -Z, hence the 180 default for the
-  creature and Judith.
+  creature, the characters and the animals.
 - `y`: vertical offset, multiplied by the instance height for unit models.
+- `auto`: `0` turns the auto fit off for a slot, `1` on.
 
-The game logs `model override: ephemera.glb (...)` at startup for each model
-it picks up.
+The game logs `model: tree_2.glb → tree (...)` at startup for each file it
+picks up, and `… model: bottom … top … saddle …` once it has measured it.
 
 ## Generating with meshy.ai
 
-**Automatically:** `tools/meshy-gen` drives the Meshy API for every slot, using the
-prompts in `meshy-prompts.txt`:
+**Automatically:** `tools/meshy-gen` drives the Meshy API for every section
+of `meshy-prompts.txt` — about thirty models and variants as shipped, each a
+preview + refine task (and rigging + animations for the characters), so
+check your credits; name the ones you want to make only those:
 
 ```sh
 export MESHY_API_KEY=msy_...
-cargo run --release --manifest-path tools/meshy-gen/Cargo.toml
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml                      # everything missing
+cargo run --release --manifest-path tools/meshy-gen/Cargo.toml -- tree tree_2 house  # just these
 ```
 
 **By hand**, in the web app:

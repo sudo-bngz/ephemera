@@ -1,4 +1,10 @@
-# Prompts for tools/meshy-gen. One [section] per model slot.
+# Prompts for tools/meshy-gen. One [section] per model file.
+#
+# A section is a slot (`tree`) or a variant of one (`tree_2`, `tree_3`…):
+# every tree in the world picks one of the tree files at random, so give a
+# slot several sections with different prompts and the world stops repeating
+# itself. Add as many as you like. See assets/models/README.md for the slots
+# and the size each is fitted to.
 #
 #   prompt     what to build (≤ 800 characters); indent to continue a line
 #   texture    optional, guides the texturing pass separately from the shape
@@ -57,3 +63,176 @@ polycount = 3000
 prompt = weathered alien rock spire with layered sediment bands and a flat
   top, tall and narrow, stylized low poly
 texture = dusty mauve and rose sandstone layers
+
+# ---------------------------------------------------------------- people --
+
+[villager]
+polycount = 12000
+pose = t-pose
+height = 1.75
+animate = idle, walking, sitting
+prompt = marsh tribe elder, wiry, wrapped in layered reed-fibre cloth and a
+  long cloak, carved bone jewellery, grey hair in braids, barefoot, stylized
+  game character, full body
+texture = faded indigo and ochre cloth, bone and shell beads, weathered skin
+
+[villager_2]
+polycount = 12000
+pose = t-pose
+height = 1.7
+animate = idle, walking, sitting
+prompt = young marsh tribe fisher, broad-shouldered, bare chest painted with
+  teal spirals, short wrapped skirt, a coiled net rope over one shoulder,
+  stylized game character, full body
+texture = sun-browned skin, teal paint, rust-red cloth, rope of pale fibre
+
+# ---------------------------------------------------------------- plants --
+# Fitted to the size the world asks for (a tree is 7–16 m tall).
+
+[tree]
+polycount = 6000
+prompt = alien bulb tree, thick twisting trunk, canopy of three or four large
+  round pods like glowing lanterns, roots gripping the ground, stylized game
+  asset
+texture = dark bark with violet moss, pods pale green with a faint inner glow
+
+[tree_2]
+polycount = 6000
+prompt = alien tree with a tall slender trunk that splits into a wide flat
+  umbrella canopy of overlapping leathery leaves, stylized game asset
+texture = bark the colour of rust, leaves deep teal with amber undersides
+
+[tree_3]
+polycount = 6000
+prompt = gnarled alien swamp tree with a bulbous trunk, drooping fronds like
+  willow, hanging seed lanterns, stylized game asset
+texture = grey-green bark, fronds dusty lilac, lanterns glowing soft orange
+
+[mushroom]
+polycount = 6000
+prompt = giant alien mushroom tall as a house, thick pale stalk, wide domed
+  cap, ribbed gills underneath that glow, stylized game asset
+texture = cream stalk, cap deep purple with pale spots, gills glowing cyan
+
+[mushroom_2]
+polycount = 6000
+prompt = cluster of giant alien fungi, one tall thin stalk with a bell cap and
+  two shorter ones around its base, stylized game asset
+texture = ochre caps with crimson rims, stalks bone white
+
+# ---------------------------------------------------------------- rocks --
+
+[boulder]
+polycount = 2000
+prompt = large weathered boulder, rounded, cracked, a little lichen, stylized
+  low poly game asset
+texture = grey-violet stone with pale lichen patches
+
+[boulder_2]
+polycount = 2000
+prompt = angular rock outcrop of layered slabs, stylized low poly game asset
+texture = dark slate with rust-coloured bands
+
+[spire]
+polycount = 2500
+prompt = tall thin needle of rock leaning slightly, eroded, stylized low poly
+  game asset
+texture = pale grey stone streaked with ochre
+
+[crystal]
+polycount = 4000
+prompt = cluster of giant crystal shards growing out of the ground at
+  different angles, sharp hexagonal columns, stylized game asset
+texture = translucent ice blue with violet cores, glowing faintly
+
+[rib]
+polycount = 3000
+prompt = enormous curved rib bone arch standing on its two ends, weathered,
+  cracked, stylized game asset
+texture = bleached bone with grey weathering in the cracks
+
+# ---------------------------------------------------------------- buildings --
+# Fitted to the footprint the world asks for; the origin is at the ground.
+
+[hut]
+polycount = 8000
+prompt = round tribal hut on tall wooden stilts over water, a circular deck
+  with a railing, woven reed walls, a steep conical thatched roof, a ladder,
+  stylized game asset
+texture = dark wet wood, golden thatch, woven reed walls in ochre and green
+
+[hut_2]
+polycount = 8000
+prompt = stilt house with a square deck, walls of bundled reeds, a low peaked
+  roof of overlapping large leaves, fish drying on a rack, stylized game asset
+texture = grey driftwood, leaf roof deep green, reeds pale straw
+
+[house]
+polycount = 8000
+prompt = small stone house with thick walls, a pyramid thatched roof, a round
+  doorway hung with cloth, stylized game asset
+texture = ochre sandstone blocks, golden thatch, indigo door cloth
+
+[house_2]
+polycount = 8000
+prompt = squat stone dwelling with a domed roof, tiny windows, clay chimney,
+  stylized game asset
+texture = pale clay with blue painted patterns around the door
+
+[house_3]
+polycount = 8000
+prompt = two-storey stone house with an external stair, a slate roof and a
+  wooden balcony, stylized game asset
+texture = grey stone, dark slate, weathered wood
+
+[tower]
+polycount = 8000
+prompt = round stone watchtower with a conical slate roof, arrow slits, a
+  small balcony near the top, stylized game asset
+texture = dark grey stone, blue-black slate roof
+
+[torch]
+polycount = 1500
+prompt = tribal standing torch, a tall wooden post wrapped in rope holding an
+  iron basket with a burning fire, stylized game asset
+texture = dark wood, rusted iron, bright orange flame
+
+[canoe]
+polycount = 2500
+prompt = long narrow dugout canoe carved from a single log, a paddle resting
+  inside, stylized low poly game asset
+texture = dark oiled wood with a carved pale pattern along the side
+
+# ---------------------------------------------------------------- animals --
+# Facing +Z like Meshy's exports; the game turns them round.
+
+[wader]
+polycount = 8000
+prompt = tall alien wading bird like a heron, very long thin legs, long neck,
+  a narrow spear beak, folded wings, standing, stylized game creature
+texture = pale rose and grey plumage, legs dark, one glowing amber eye
+
+[grazer]
+polycount = 8000
+prompt = large alien herd animal, barrel body, four stout legs, low heavy
+  head, patches of glowing lichen growing on its back, standing, stylized
+  game creature
+texture = dark moss-green hide, lichen patches glowing pale green
+
+[goat]
+polycount = 6000
+prompt = shaggy alien mountain goat, curved horns, standing on four legs,
+  stylized game creature
+texture = grey-white shaggy fur, dark horns
+
+[kite]
+polycount = 5000
+prompt = alien flying ray creature, flat wide body with two large wing fins
+  spread out, long thin tail, gliding, stylized game creature
+texture = translucent violet skin with glowing magenta edges
+
+[leaper]
+polycount = 4000
+prompt = sleek alien fish with a torpedo body, large tail fin, small fins,
+  stylized game creature
+texture = silver-blue scales with an iridescent sheen

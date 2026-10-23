@@ -4,20 +4,17 @@
 //! `assets/models/<name>.glb` and every matching object switches to it on the
 //! next run — no code change. Missing files simply keep the placeholder.
 //!
-//! | file              | replaces                                   |
-//! |-------------------|--------------------------------------------|
-//! | `ephemera.glb`    | the creature (player and rivals)           |
-//! | `judith.glb`      | Judith, on foot and in the saddle          |
-//! | `reed_tall.glb`   | tall (solid) reed clumps                   |
-//! | `reed.glb`        | short reed clumps                          |
-//! | `gate.glb`        | race gates                                 |
-//! | `mesa.glb`        | distant rock formations on the horizon     |
+//! Every kind of thing in the world has a slot (`ModelKind::file_stem`):
+//! the creature, Judith, the villagers, every plant, rock, building and
+//! animal. A slot holds any number of **variants**: `tree.glb`, `tree_2.glb`,
+//! `tree_3.glb`… and each spawned thing picks one at random, so a forest is
+//! not one tree repeated.
 //!
-//! Per-model fit is tuned in `assets/models/models.cfg`, one line each:
-//!
-//! ```text
-//! ephemera  scale=6.0  yaw=180  y=-1.0
-//! ```
+//! Most slots are **auto-fitted**: the model's bounding box is scaled to the
+//! size the world asked for (a 14 m tree, a 5 × 4 × 6 m house), its bottom
+//! put on the ground, so any Meshy export fits without tuning. The creature,
+//! Judith and the villagers are fitted by hand in `assets/models/models.cfg`
+//! (`scale`, `yaw`, `y`), where any slot's auto fit can also be nudged.
 //!
 //! The mechanism is a plain ECS swap: spawners tag entities with `Swappable`,
 //! and `swap_in_models` (on `Added<Swappable>`) hides the placeholder meshes
@@ -32,53 +29,126 @@ use bevy::prelude::*;
 pub enum ModelKind {
     Ephemera,
     Judith,
+    Villager,
     ReedTall,
     Reed,
     Gate,
     Mesa,
+    Tree,
+    Mushroom,
+    Boulder,
+    Spire,
+    Crystal,
+    Rib,
+    Hut,
+    House,
+    Tower,
+    Torch,
+    Canoe,
+    Wader,
+    Grazer,
+    Goat,
+    Kite,
+    Leaper,
 }
 
 impl ModelKind {
-    const ALL: [ModelKind; 6] = [
+    pub const ALL: [ModelKind; 23] = [
         ModelKind::Ephemera,
         ModelKind::Judith,
+        ModelKind::Villager,
         ModelKind::ReedTall,
         ModelKind::Reed,
         ModelKind::Gate,
         ModelKind::Mesa,
+        ModelKind::Tree,
+        ModelKind::Mushroom,
+        ModelKind::Boulder,
+        ModelKind::Spire,
+        ModelKind::Crystal,
+        ModelKind::Rib,
+        ModelKind::Hut,
+        ModelKind::House,
+        ModelKind::Tower,
+        ModelKind::Torch,
+        ModelKind::Canoe,
+        ModelKind::Wader,
+        ModelKind::Grazer,
+        ModelKind::Goat,
+        ModelKind::Kite,
+        ModelKind::Leaper,
     ];
 
     pub fn file_stem(self) -> &'static str {
         match self {
             ModelKind::Ephemera => "ephemera",
             ModelKind::Judith => "judith",
+            ModelKind::Villager => "villager",
             ModelKind::ReedTall => "reed_tall",
             ModelKind::Reed => "reed",
             ModelKind::Gate => "gate",
             ModelKind::Mesa => "mesa",
+            ModelKind::Tree => "tree",
+            ModelKind::Mushroom => "mushroom",
+            ModelKind::Boulder => "boulder",
+            ModelKind::Spire => "spire",
+            ModelKind::Crystal => "crystal",
+            ModelKind::Rib => "rib",
+            ModelKind::Hut => "hut",
+            ModelKind::House => "house",
+            ModelKind::Tower => "tower",
+            ModelKind::Torch => "torch",
+            ModelKind::Canoe => "canoe",
+            ModelKind::Wader => "wader",
+            ModelKind::Grazer => "grazer",
+            ModelKind::Goat => "goat",
+            ModelKind::Kite => "kite",
+            ModelKind::Leaper => "leaper",
         }
     }
 
     /// Sensible defaults. Meshy (like most tools) exports glTF facing +Z,
-    /// while Bevy's forward is -Z, hence the 180° for creatures.
+    /// while Bevy's forward is -Z, hence the 180° for creatures. Everything
+    /// but the three characters is auto-fitted to the size it is spawned at.
     fn default_fit(self) -> Fit {
         match self {
             ModelKind::Ephemera => Fit {
                 scale: 6.0,
                 yaw_deg: 180.0,
                 y: -1.0,
+                auto: false,
                 rig: Default::default(),
             },
-            ModelKind::Judith => Fit {
+            ModelKind::Judith | ModelKind::Villager => Fit {
                 scale: 1.8,
                 yaw_deg: 180.0,
                 y: 0.0,
+                auto: false,
+                rig: Default::default(),
+            },
+            ModelKind::ReedTall | ModelKind::Reed | ModelKind::Gate | ModelKind::Mesa => Fit {
+                scale: 1.0,
+                yaw_deg: 0.0,
+                y: 0.0,
+                auto: false,
+                rig: Default::default(),
+            },
+            ModelKind::Wader
+            | ModelKind::Grazer
+            | ModelKind::Goat
+            | ModelKind::Kite
+            | ModelKind::Leaper => Fit {
+                scale: 1.0,
+                yaw_deg: 180.0,
+                y: 0.0,
+                auto: true,
                 rig: Default::default(),
             },
             _ => Fit {
                 scale: 1.0,
                 yaw_deg: 0.0,
                 y: 0.0,
+                auto: true,
                 rig: Default::default(),
             },
         }
@@ -86,11 +156,14 @@ impl ModelKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Fit {
-    scale: f32,
-    yaw_deg: f32,
-    y: f32,
-    rig: crate::rig::RigTuning,
+pub struct Fit {
+    pub scale: f32,
+    pub yaw_deg: f32,
+    pub y: f32,
+    /// Fit the model's bounding box to the spawned size (`anim.rs`), with
+    /// `scale` and `y` as nudges on top.
+    pub auto: bool,
+    pub rig: crate::rig::RigTuning,
 }
 
 #[derive(Clone, Debug)]
@@ -103,12 +176,35 @@ pub struct Model {
 
 #[derive(Resource, Default, Debug)]
 pub struct Models {
+    /// Every variant of every slot, in file order.
     loaded: Vec<(ModelKind, Model)>,
 }
 
 impl Models {
-    fn get(&self, kind: ModelKind) -> Option<&Model> {
-        self.loaded.iter().find(|(k, _)| *k == kind).map(|(_, m)| m)
+    /// One of the slot's variants, chosen by `variant` (any number).
+    fn get(&self, kind: ModelKind, variant: u32) -> Option<&Model> {
+        let n = self.loaded.iter().filter(|(k, _)| *k == kind).count();
+        if n == 0 {
+            return None;
+        }
+        self.loaded
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .nth(variant as usize % n)
+            .map(|(_, m)| m)
+    }
+
+    /// Slots with at least one model.
+    pub fn kinds(&self) -> impl Iterator<Item = ModelKind> + '_ {
+        let mut seen = Vec::new();
+        self.loaded.iter().filter_map(move |(k, _)| {
+            if seen.contains(k) {
+                None
+            } else {
+                seen.push(*k);
+                Some(*k)
+            }
+        })
     }
 
     /// For tests: use `scene` for `kind`, with the default fit.
@@ -127,11 +223,14 @@ impl Models {
 }
 
 /// Put this on an entity whose placeholder meshes may be replaced.
-/// `size` multiplies the model's fitted scale (e.g. a clump's radius/height).
+/// `size` is the box the model should fill (auto-fitted slots) or a
+/// multiplier on the hand-tuned scale (the others). `variant` picks among
+/// the slot's files.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Swappable {
     pub kind: ModelKind,
     pub size: Vec3,
+    pub variant: u32,
 }
 
 impl Swappable {
@@ -139,20 +238,39 @@ impl Swappable {
         Self {
             kind,
             size: Vec3::ONE,
+            variant: 0,
         }
     }
 
     pub fn sized(kind: ModelKind, size: Vec3) -> Self {
-        Self { kind, size }
+        Self {
+            kind,
+            size,
+            variant: 0,
+        }
+    }
+
+    pub fn variant(mut self, variant: u32) -> Self {
+        self.variant = variant;
+        self
     }
 }
 
-/// Marks a model that replaced a placeholder; the rigger reads it.
+/// Marks a model that replaced a placeholder; the rigger and the measurer
+/// read it.
 #[derive(Component, Clone, Debug)]
 pub struct SwappedModel {
     pub kind: ModelKind,
-    pub rig: crate::rig::RigTuning,
+    pub fit: Fit,
+    /// The box to fill (auto fit) or the scale multiplier (manual fit).
+    pub size: Vec3,
     pub gltf: Handle<Gltf>,
+}
+
+impl SwappedModel {
+    pub fn rig(&self) -> crate::rig::RigTuning {
+        self.fit.rig
+    }
 }
 
 fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
@@ -163,7 +281,10 @@ fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
         let Some(name) = parts.next() else {
             continue;
         };
-        let Some(kind) = ModelKind::ALL.iter().find(|k| k.file_stem() == name) else {
+        let Some(kind) = ModelKind::ALL
+            .iter()
+            .find(|k| k.file_stem() == slot_of(name))
+        else {
             warn!("models.cfg: unknown model `{name}`");
             continue;
         };
@@ -180,6 +301,7 @@ fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
                 "scale" => fit.scale = v,
                 "yaw" => fit.yaw_deg = v,
                 "y" => fit.y = v,
+                "auto" => fit.auto = v != 0.0,
                 // Rig thresholds (see rig.rs), fractions of the model's size.
                 "wing_hinge" => fit.rig.wing_hinge = v,
                 "wing_min_y" => fit.rig.wing_min_y = v,
@@ -192,6 +314,14 @@ fn parse_cfg(text: &str) -> Vec<(String, Fit)> {
     out
 }
 
+/// The slot a file belongs to: `tree_2` is a variant of `tree`.
+pub fn slot_of(stem: &str) -> &str {
+    match stem.rsplit_once('_') {
+        Some((slot, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => slot,
+        _ => stem,
+    }
+}
+
 fn load_models(mut commands: Commands, assets: Res<AssetServer>) {
     let dir = FileAssetReader::get_base_path()
         .join("assets")
@@ -200,21 +330,51 @@ fn load_models(mut commands: Commands, assets: Res<AssetServer>) {
         .map(|t| parse_cfg(&t))
         .unwrap_or_default();
 
+    let mut stems: Vec<String> = std::fs::read_dir(&dir)
+        .map(|d| {
+            d.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "glb"))
+                .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+    stems.sort();
     let mut models = Models::default();
-    for kind in ModelKind::ALL {
-        let file = format!("{}.glb", kind.file_stem());
-        if !dir.join(&file).exists() {
+    for stem in stems {
+        let Some(kind) = ModelKind::ALL
+            .iter()
+            .copied()
+            .find(|k| k.file_stem() == slot_of(&stem))
+        else {
+            if !stem.ends_with(".static") {
+                warn!("assets/models/{stem}.glb: no slot of that name (see README.md)");
+            }
             continue;
-        }
+        };
+        let file = format!("{stem}.glb");
+        // A variant's own line first, then the slot's, then the default.
         let fit = overrides
             .iter()
-            .find(|(n, _)| n == kind.file_stem())
+            .find(|(n, _)| *n == stem)
+            .or_else(|| overrides.iter().find(|(n, _)| n == kind.file_stem()))
             .map(|(_, f)| *f)
             .unwrap_or_else(|| kind.default_fit());
-        info!("model override: {file} ({fit:?})");
+        info!("model: {file} → {} ({fit:?})", kind.file_stem());
         let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{file}")));
         let gltf = assets.load(format!("models/{file}"));
         models.loaded.push((kind, Model { scene, gltf, fit }));
+    }
+    if !models.loaded.is_empty() {
+        info!(
+            "{} model file(s) for {} slot(s): {}",
+            models.loaded.len(),
+            models.kinds().count(),
+            models
+                .kinds()
+                .map(|k| k.file_stem())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
     commands.insert_resource(models);
 }
@@ -229,7 +389,7 @@ fn swap_in_models(
         return;
     }
     for (entity, swap, children, has_own_mesh) in &added {
-        let Some(model) = models.get(swap.kind) else {
+        let Some(model) = models.get(swap.kind, swap.variant) else {
             continue;
         };
         // Hide the placeholder: the entity's own mesh, and/or its children.
@@ -246,11 +406,14 @@ fn swap_in_models(
             }
         }
         let fit = model.fit;
+        // Auto-fitted models are placed properly once measured (`anim.rs`);
+        // until then they sit at the hand fit.
         let child = commands
             .spawn((
                 SwappedModel {
                     kind: swap.kind,
-                    rig: fit.rig,
+                    fit,
+                    size: swap.size,
                     gltf: model.gltf.clone(),
                 },
                 SceneRoot(model.scene.clone()),
@@ -344,6 +507,21 @@ mod tests {
             named,
             "unknown model name in models.cfg"
         );
+    }
+
+    #[test]
+    fn variants_share_a_slot() {
+        assert_eq!(slot_of("tree_2"), "tree");
+        assert_eq!(slot_of("reed_tall"), "reed_tall");
+        assert_eq!(slot_of("reed_tall_3"), "reed_tall");
+        assert_eq!(slot_of("tree_"), "tree_");
+        let m = Models::default()
+            .with(ModelKind::Tree, Handle::default())
+            .with(ModelKind::Tree, Handle::default())
+            .with(ModelKind::Boulder, Handle::default());
+        assert!(m.get(ModelKind::Tree, 7).is_some());
+        assert!(m.get(ModelKind::House, 0).is_none());
+        assert_eq!(m.kinds().count(), 2);
     }
 
     #[test]
@@ -444,6 +622,45 @@ mod gltf_tests {
         app.world_mut().spawn(SceneRoot(scene));
         let spawned = run_until(&mut app, |w| w.query::<&Mesh3d>().iter(w).count() > 0);
         assert!(spawned, "the GLB scene never spawned a mesh");
+    }
+
+    /// An auto-fitted slot: any model is scaled to the box the world asked
+    /// for, bottom on the ground.
+    #[test]
+    fn auto_fit_fills_the_requested_box() {
+        let mut app = app();
+        let scene = load(&mut app, "model.glb");
+        app.insert_resource(Models::default().with(ModelKind::Tree, scene));
+        let tree = app
+            .world_mut()
+            .spawn((
+                Swappable::sized(ModelKind::Tree, Vec3::new(3.0, 10.0, 3.0)).variant(5),
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
+        let measured = run_until(&mut app, |w| {
+            w.get::<crate::anim::ModelBounds>(tree).is_some()
+        });
+        assert!(measured, "never measured");
+        let b = app.world().get::<crate::anim::ModelBounds>(tree).unwrap();
+        assert!(b.bottom.abs() < 0.02, "bottom {}", b.bottom);
+        assert!((b.top - 10.0).abs() < 0.1, "top {}", b.top);
+        let w = app.world_mut();
+        let placement = w
+            .query_filtered::<&Transform, With<SwappedModel>>()
+            .single(w)
+            .unwrap();
+        assert!(
+            (placement.scale.y - 10.0).abs() < 0.1,
+            "{:?}",
+            placement.scale
+        );
+        assert!(
+            (placement.scale.x - 3.0).abs() < 0.1,
+            "{:?}",
+            placement.scale
+        );
     }
 
     /// A static mosquito model becomes a skinned mesh whose wings beat.

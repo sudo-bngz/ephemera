@@ -82,7 +82,10 @@ pub fn spawn_rider(
     cloth: Color,
 ) -> Entity {
     let e = spawn_figure(commands, meshes, materials, Vec3::ZERO, cloth, false);
-    commands.entity(e).insert(Name::new("Rider"));
+    commands.entity(e).insert((
+        crate::models::Swappable::new(crate::models::ModelKind::Villager),
+        Name::new("Rider"),
+    ));
     e
 }
 
@@ -92,12 +95,13 @@ pub fn spawn_villager(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     cloth: Color,
+    variant: u32,
 ) -> Entity {
     let e = spawn_figure(commands, meshes, materials, Vec3::ZERO, cloth, false);
-    commands
-        .entity(e)
-        .remove::<PhaseScoped>()
-        .insert(Name::new("Villager"));
+    commands.entity(e).remove::<PhaseScoped>().insert((
+        crate::models::Swappable::new(crate::models::ModelKind::Villager).variant(variant),
+        Name::new("Villager"),
+    ));
     e
 }
 

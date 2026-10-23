@@ -1158,6 +1158,11 @@ fn tree(
         .spawn((
             Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
             Visibility::default(),
+            Swappable::sized(
+                ModelKind::Tree,
+                Vec3::new(height * 0.6, height, height * 0.6),
+            )
+            .variant(rng.r#gen()),
             Sway {
                 phase: rng.gen_range(0.0..std::f32::consts::TAU),
                 amount: 0.025,
@@ -1216,24 +1221,37 @@ fn boulder(
         size * rng.gen_range(0.55..0.9),
         size * rng.gen_range(0.8..1.3),
     );
+    let yaw = rng.gen_range(0.0..std::f32::consts::TAU);
+    let tilt = Quat::from_euler(
+        EulerRot::YXZ,
+        0.0,
+        rng.gen_range(-0.3..0.3),
+        rng.gen_range(-0.3..0.3),
+    );
     commands
         .spawn((
-            Mesh3d(a.rock_mesh.clone()),
-            MeshMaterial3d(a.rock_mat.clone()),
-            Transform::from_translation(at + Vec3::Y * scale.y * 0.55)
-                .with_rotation(Quat::from_euler(
-                    EulerRot::YXZ,
-                    rng.gen_range(0.0..std::f32::consts::TAU),
-                    rng.gen_range(-0.3..0.3),
-                    rng.gen_range(-0.3..0.3),
-                ))
-                .with_scale(scale),
+            Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
+            Visibility::default(),
+            Swappable::sized(
+                ModelKind::Boulder,
+                Vec3::new(scale.x * 2.0, scale.y * 1.6, scale.z * 2.0),
+            )
+            .variant(rng.r#gen()),
             Obstacle {
                 radius: scale.x.max(scale.z) * 0.9,
-                below: scale.y,
-                above: scale.y,
+                below: 0.0,
+                above: scale.y * 1.6,
             },
         ))
+        .with_children(|p| {
+            p.spawn((
+                Mesh3d(a.rock_mesh.clone()),
+                MeshMaterial3d(a.rock_mat.clone()),
+                Transform::from_translation(Vec3::Y * scale.y * 0.55)
+                    .with_rotation(tilt)
+                    .with_scale(scale),
+            ));
+        })
         .id()
 }
 
@@ -1248,19 +1266,27 @@ fn spire(
     let r = height * rng.gen_range(0.1..0.16);
     let tilt = Quat::from_rotation_x(rng.gen_range(-0.12..0.12))
         * Quat::from_rotation_z(rng.gen_range(-0.12..0.12));
+    let yaw = rng.gen_range(0.0..6.0);
     commands
         .spawn((
-            Mesh3d(a.spire_mesh.clone()),
-            MeshMaterial3d(a.rock_mat.clone()),
-            Transform::from_translation(at + tilt * Vec3::Y * height * 0.5)
-                .with_rotation(tilt * Quat::from_rotation_y(rng.gen_range(0.0..6.0)))
-                .with_scale(Vec3::new(r, height, r)),
+            Transform::from_translation(at).with_rotation(tilt * Quat::from_rotation_y(yaw)),
+            Visibility::default(),
+            Swappable::sized(ModelKind::Spire, Vec3::new(r * 2.0, height, r * 2.0))
+                .variant(rng.r#gen()),
             Obstacle {
                 radius: r + 0.5,
-                below: height * 0.5,
-                above: height * 0.45,
+                below: 0.0,
+                above: height * 0.95,
             },
         ))
+        .with_children(|p| {
+            p.spawn((
+                Mesh3d(a.spire_mesh.clone()),
+                MeshMaterial3d(a.rock_mat.clone()),
+                Transform::from_translation(Vec3::Y * height * 0.5)
+                    .with_scale(Vec3::new(r, height, r)),
+            ));
+        })
         .id()
 }
 

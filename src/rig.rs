@@ -861,7 +861,7 @@ pub(crate) fn rig_models(
     for (root, swap, tf, parent) in &swapped {
         let kind = match swap.kind {
             ModelKind::Ephemera => RigKind::Wings,
-            ModelKind::Judith => RigKind::Humanoid,
+            ModelKind::Judith | ModelKind::Villager => RigKind::Humanoid,
             _ => {
                 commands.entity(root).insert(Rigged);
                 continue;
@@ -916,7 +916,7 @@ pub(crate) fn rig_models(
             continue;
         }
         let plan = match kind {
-            RigKind::Wings => plan_wings(&points, swap.rig),
+            RigKind::Wings => plan_wings(&points, swap.rig()),
             RigKind::Humanoid => plan_humanoid(&points),
         };
 

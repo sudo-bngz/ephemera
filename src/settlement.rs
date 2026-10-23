@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::models::{ModelKind, Swappable};
 use crate::terrain::{Props, SEA_LEVEL, Site, SiteKind, Terrain};
 use crate::world::{Obstacle, WetlandAssets};
 
@@ -182,6 +183,15 @@ pub fn spawn(
                             Transform::from_translation(*h)
                                 .with_rotation(Quat::from_rotation_y(yaw)),
                             Visibility::default(),
+                            Swappable::sized(
+                                ModelKind::Hut,
+                                Vec3::new(
+                                    (hut_r + 1.2) * 2.0,
+                                    deck + 2.2 + hut_r * 0.9,
+                                    (hut_r + 1.2) * 2.0,
+                                ),
+                            )
+                            .variant(rng.r#gen()),
                             Obstacle {
                                 radius: hut_r + 0.6,
                                 below: 0.0,
@@ -251,17 +261,25 @@ pub fn spawn(
                     let a = rng.gen_range(0.0..std::f32::consts::TAU);
                     let r = rng.gen_range(7.0..12.0);
                     p.spawn((
-                        Mesh3d(wet.canopy_mesh.clone()),
-                        MeshMaterial3d(sa.wood.clone()),
                         Transform::from_xyz(
                             a.cos() * r,
-                            SEA_LEVEL - site.height + 0.15,
+                            SEA_LEVEL - site.height - 0.1,
                             a.sin() * r,
                         )
-                        .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..6.0)))
-                        .with_scale(Vec3::new(0.5, 0.3, 2.6)),
-                        NotShadowCaster,
-                    ));
+                        .with_rotation(Quat::from_rotation_y(rng.gen_range(0.0..6.0))),
+                        Visibility::default(),
+                        Swappable::sized(ModelKind::Canoe, Vec3::new(1.0, 0.7, 5.2))
+                            .variant(rng.r#gen()),
+                    ))
+                    .with_children(|p| {
+                        p.spawn((
+                            Mesh3d(wet.canopy_mesh.clone()),
+                            MeshMaterial3d(sa.wood.clone()),
+                            Transform::from_xyz(0.0, 0.25, 0.0)
+                                .with_scale(Vec3::new(0.5, 0.3, 2.6)),
+                            NotShadowCaster,
+                        ));
+                    });
                 }
             });
         }
@@ -284,23 +302,7 @@ pub fn spawn(
                 }
                 // The tower.
                 let tower_h = rng.gen_range(12.0..18.0);
-                p.spawn((
-                    Mesh3d(sa.round_wall.clone()),
-                    MeshMaterial3d(stone.clone()),
-                    Transform::from_xyz(0.0, tower_h * 0.5, 0.0)
-                        .with_scale(Vec3::new(3.0, tower_h, 3.0)),
-                    Obstacle {
-                        radius: 3.6,
-                        below: tower_h * 0.5,
-                        above: tower_h * 0.5 + 4.0,
-                    },
-                ));
-                p.spawn((
-                    Mesh3d(sa.cone_roof.clone()),
-                    MeshMaterial3d(sa.slate.clone()),
-                    Transform::from_xyz(0.0, tower_h + 1.8, 0.0)
-                        .with_scale(Vec3::new(3.8, 3.6, 3.8)),
-                ));
+                tower(p, sa, &stone, Vec3::ZERO, 3.0, tower_h);
                 banner(p, sa, Vec3::new(0.0, tower_h + 3.6, 0.0), 4.0, 0);
                 // The well, and a ring wall with gaps for the gates.
                 p.spawn((
@@ -352,23 +354,7 @@ pub fn spawn(
                     let d = r * rng.gen_range(0.5..0.85);
                     let at = Vec3::new(a.cos() * d, 0.0, a.sin() * d);
                     let (tr, th) = (rng.gen_range(2.4..4.0), rng.gen_range(10.0..22.0));
-                    p.spawn((
-                        Mesh3d(sa.round_wall.clone()),
-                        MeshMaterial3d(stone.clone()),
-                        Transform::from_translation(at + Vec3::Y * th * 0.5)
-                            .with_scale(Vec3::new(tr, th, tr)),
-                        Obstacle {
-                            radius: tr + 0.6,
-                            below: th * 0.5,
-                            above: th * 0.5 + tr * 1.2,
-                        },
-                    ));
-                    p.spawn((
-                        Mesh3d(sa.cone_roof.clone()),
-                        MeshMaterial3d(sa.slate.clone()),
-                        Transform::from_translation(at + Vec3::Y * (th + tr * 0.6))
-                            .with_scale(Vec3::new(tr + 0.6, tr * 1.2, tr + 0.6)),
-                    ));
+                    tower(p, sa, &stone, at, tr, th);
                     banner(p, sa, at + Vec3::Y * (th + tr * 1.2), 3.0, k);
                     towers.push(at);
                 }
@@ -421,7 +407,7 @@ pub fn spawn(
     for _ in 0..count {
         let (home, radius) = people[rng.gen_range(0..people.len())];
         let cloth = sa_cloth(&mut rng);
-        let e = crate::components::spawn_villager(commands, meshes, materials, cloth);
+        let e = crate::components::spawn_villager(commands, meshes, materials, cloth, rng.r#gen());
         let a = rng.gen_range(0.0..std::f32::consts::TAU);
         let d = rng.gen_range(0.0..radius * 0.8);
         let at = home + Vec3::new(a.cos() * d, 0.0, a.sin() * d);
@@ -470,22 +456,75 @@ fn plank(
     ));
 }
 
+/// A model variant picked from where a thing stands (no RNG needed).
+fn variant_at(at: Vec3) -> u32 {
+    (at.x * 73.1 + at.z * 31.7 + at.y * 7.3).abs() as u32
+}
+
 fn torch(p: &mut ChildSpawnerCommands, sa: &SettlementAssets, at: Vec3, size: f32, phase: f32) {
     p.spawn((
-        Mesh3d(sa.post.clone()),
-        MeshMaterial3d(sa.wood.clone()),
-        Transform::from_translation(at + Vec3::Y * 1.0).with_scale(Vec3::new(0.12, 2.0, 0.12)),
-    ));
+        Transform::from_translation(at),
+        Visibility::default(),
+        Swappable::sized(ModelKind::Torch, Vec3::new(0.7, 2.6, 0.7)).variant(variant_at(at)),
+    ))
+    .with_children(|p| {
+        p.spawn((
+            Mesh3d(sa.post.clone()),
+            MeshMaterial3d(sa.wood.clone()),
+            Transform::from_xyz(0.0, 1.0, 0.0).with_scale(Vec3::new(0.12, 2.0, 0.12)),
+        ));
+        p.spawn((
+            Torch {
+                phase,
+                size: size * 0.4,
+            },
+            Mesh3d(sa.flame.clone()),
+            MeshMaterial3d(sa.flame_mat.clone()),
+            Transform::from_xyz(0.0, 2.2, 0.0).with_scale(Vec3::splat(size * 0.4)),
+            NotShadowCaster,
+        ));
+    });
+}
+
+/// A round tower with a conical roof, `r` wide and `h` tall to the eaves.
+fn tower(
+    p: &mut ChildSpawnerCommands,
+    sa: &SettlementAssets,
+    stone: &Handle<StandardMaterial>,
+    at: Vec3,
+    r: f32,
+    h: f32,
+) {
     p.spawn((
-        Torch {
-            phase,
-            size: size * 0.4,
+        Transform::from_translation(at),
+        Visibility::default(),
+        Swappable::sized(
+            ModelKind::Tower,
+            Vec3::new(r * 2.0 + 1.2, h + r * 1.2, r * 2.0 + 1.2),
+        )
+        .variant(variant_at(at)),
+        Obstacle {
+            radius: r + 0.6,
+            below: 0.0,
+            above: h + r * 1.2,
         },
-        Mesh3d(sa.flame.clone()),
-        MeshMaterial3d(sa.flame_mat.clone()),
-        Transform::from_translation(at + Vec3::Y * 2.2).with_scale(Vec3::splat(size * 0.4)),
-        NotShadowCaster,
-    ));
+    ))
+    .with_children(|p| {
+        p.spawn((
+            Mesh3d(sa.round_wall.clone()),
+            MeshMaterial3d(stone.clone()),
+            Transform::from_xyz(0.0, h * 0.5, 0.0).with_scale(Vec3::new(r, h, r)),
+        ));
+        p.spawn((
+            Mesh3d(sa.cone_roof.clone()),
+            MeshMaterial3d(sa.slate.clone()),
+            Transform::from_xyz(0.0, h + r * 0.6, 0.0).with_scale(Vec3::new(
+                r + 0.6,
+                r * 1.2,
+                r + 0.6,
+            )),
+        ));
+    });
 }
 
 fn banner(p: &mut ChildSpawnerCommands, sa: &SettlementAssets, at: Vec3, height: f32, k: usize) {
@@ -521,25 +560,31 @@ fn house(
     } else {
         sa.slate.clone()
     };
+    let roof_h = w.min(l) * 0.6;
     p.spawn((
-        Mesh3d(sa.block.clone()),
-        MeshMaterial3d(stone.clone()),
-        Transform::from_translation(at + Vec3::Y * h * 0.5)
-            .with_rotation(Quat::from_rotation_y(yaw))
-            .with_scale(Vec3::new(w, h, l)),
+        Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
+        Visibility::default(),
+        Swappable::sized(ModelKind::House, Vec3::new(w, h + roof_h, l)).variant(variant_at(at)),
         Obstacle {
             radius: w.max(l) * 0.6,
-            below: h * 0.5,
-            above: h * 0.5 + 2.5,
+            below: 0.0,
+            above: h + roof_h,
         },
-    ));
-    p.spawn((
-        Mesh3d(sa.pyramid_roof.clone()),
-        MeshMaterial3d(roof_mat),
-        Transform::from_translation(at + Vec3::Y * (h + w.min(l) * 0.3))
-            .with_rotation(Quat::from_rotation_y(yaw + std::f32::consts::FRAC_PI_4))
-            .with_scale(Vec3::new(w * 0.78, w.min(l) * 0.6, l * 0.78)),
-    ));
+    ))
+    .with_children(|p| {
+        p.spawn((
+            Mesh3d(sa.block.clone()),
+            MeshMaterial3d(stone.clone()),
+            Transform::from_xyz(0.0, h * 0.5, 0.0).with_scale(Vec3::new(w, h, l)),
+        ));
+        p.spawn((
+            Mesh3d(sa.pyramid_roof.clone()),
+            MeshMaterial3d(roof_mat),
+            Transform::from_xyz(0.0, h + roof_h * 0.5, 0.0)
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_4))
+                .with_scale(Vec3::new(w * 0.78, roof_h, l * 0.78)),
+        ));
+    });
 }
 
 /// Villagers stroll between spots around home and stand a while.
@@ -630,6 +675,7 @@ mod tests {
                         &mut meshes,
                         &mut materials,
                         Color::WHITE,
+                        0,
                     )
                 },
             )

@@ -22,6 +22,7 @@ use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 
 use crate::creature::Flap;
+use crate::fauna::{Beast, Critter};
 use crate::models::SwappedModel;
 use crate::rig::{Gait, Stance};
 
@@ -113,7 +114,7 @@ fn frame_to(
     e: Entity,
     top: Entity,
     parents: &Query<&ChildOf>,
-    transforms: &Query<&Transform>,
+    transforms: &Query<&Transform, Without<SwappedModel>>,
 ) -> Affine3A {
     let mut m = Affine3A::IDENTITY;
     let mut cur = e;
@@ -137,10 +138,11 @@ fn measure_models(
     meshes3d: Query<&Mesh3d>,
     players: Query<(), With<AnimationPlayer>>,
     parents: Query<&ChildOf>,
-    transforms: Query<&Transform>,
+    transforms: Query<&Transform, Without<SwappedModel>>,
     meshes: Res<Assets<Mesh>>,
     gltfs: Res<Assets<Gltf>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut placements: Query<&mut Transform, With<SwappedModel>>,
 ) {
     for (root, swap, parent) in &swapped {
         let mut all = Vec::new();
@@ -160,21 +162,51 @@ fn measure_models(
         if handles.iter().any(|h| meshes.get(h).is_none()) {
             continue; // still loading
         }
-        // Points in the frame of the entity the model replaced.
-        let mut points = Vec::new();
+        // Points in the model's own frame (under its placement transform).
+        let mut local = Vec::new();
         for (e, h) in mesh_entities.iter().zip(&handles) {
-            let m = frame_to(*e, parent.parent(), &parents, &transforms);
+            let m = frame_to(*e, root, &parents, &transforms);
             if let Some(VertexAttributeValues::Float32x3(ps)) = meshes
                 .get(h)
                 .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
             {
-                points.extend(ps.iter().map(|p| m.transform_point3(Vec3::from(*p))));
+                local.extend(ps.iter().map(|p| m.transform_point3(Vec3::from(*p))));
             }
         }
-        if points.is_empty() {
+        if local.is_empty() {
             commands.entity(root).insert(Measured);
             continue;
         }
+        // Auto fit: the model's box becomes the box the world asked for,
+        // its bottom on the ground, its middle on the origin.
+        let mut placement = placements.get(root).copied().unwrap_or_default();
+        if swap.fit.auto {
+            let (lo, hi) = {
+                let mut lo = Vec3::splat(f32::MAX);
+                let mut hi = Vec3::splat(f32::MIN);
+                for p in &local {
+                    lo = lo.min(*p);
+                    hi = hi.max(*p);
+                }
+                (lo, hi.max(lo + Vec3::splat(1e-4)))
+            };
+            let yaw = Quat::from_rotation_y(swap.fit.yaw_deg.to_radians());
+            // The box, seen along the model's own axes.
+            let target = (yaw.inverse() * swap.size).abs().max(Vec3::splat(1e-4));
+            let scale = target / (hi - lo) * swap.fit.scale;
+            let centre = Vec3::new((lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5);
+            placement = Transform {
+                translation: yaw * (-centre * scale) + Vec3::Y * swap.fit.y,
+                rotation: yaw,
+                scale,
+            };
+            if let Ok(mut tf) = placements.get_mut(root) {
+                *tf = placement;
+            }
+        }
+        // …and in the frame of the entity the model replaced.
+        let a = placement.compute_affine();
+        let points: Vec<Vec3> = local.iter().map(|p| a.transform_point3(*p)).collect();
         let bounds = measure(&points);
         info!(
             "{:?} model: bottom {:.2} m, top {:.2} m, saddle at {:.2} m",
@@ -268,17 +300,27 @@ fn drive_clips(
         Option<&Gait>,
         Option<&Stance>,
         Option<&Flap>,
+        Option<&Critter>,
         Option<&ChildOf>,
     )>,
     mounts: Query<(), With<Flap>>,
     mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
     for (mut clips, parent) in &mut clips {
-        let Ok((gait, stance, flap, grand)) = drivers.get(parent.parent()) else {
+        let Ok((gait, stance, flap, critter, grand)) = drivers.get(parent.parent()) else {
             continue;
         };
         let (wanted, speed) = if let Some(flap) = flap {
             (Action::Fly, 0.6 + 0.9 * flap.intensity)
+        } else if let Some(c) = critter {
+            match c.kind {
+                Beast::Kite => (Action::Fly, 0.7 + 0.6 * c.effort),
+                Beast::Wader if c.air > 1.0 => (Action::Fly, 1.0),
+                Beast::Leaper => (Action::Swim, 0.6 + c.effort),
+                _ if c.effort > 0.8 => (Action::Run, 1.0),
+                _ if c.effort > 0.15 => (Action::Walk, (c.effort * 2.0).clamp(0.6, 1.4)),
+                _ => (Action::Idle, 1.0),
+            }
         } else if let Some(gait) = gait {
             let mounted = grand.is_some_and(|g| mounts.contains(g.parent()));
             if mounted {
